@@ -27,7 +27,7 @@ const ENABLE_THINKING_MODE = true;
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
   'gpt-4': 'z-ai/glm5',
-  'gpt-4-turbo': 'moonshotai/kimi-k2-instruct-0905',
+  'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1',
   'gpt-4o': 'deepseek-ai/deepseek-v3.2',
   'claude-3-opus': 'moonshotai/kimi-k2-thinking',
   'claude-3-sonnet': 'z-ai/glm4.7',
