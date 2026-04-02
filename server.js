@@ -2,25 +2,28 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { StringDecoder } = require('string_decoder'); // FIX: Handles multi-byte stream characters safely
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+// FIX: Increased payload limit to 50MB to prevent "413 Payload Too Large"
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // NVIDIA NIM API configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 // 🔥 REASONING DISPLAY TOGGLE - Shows/hides reasoning in output
-const SHOW_REASONING = true; // Set to true to show reasoning with <think> tags
+const SHOW_REASONING = true; 
 
-// 🔥 THINKING MODE TOGGLE - Enables thinking for specific models that support it
-const ENABLE_THINKING_MODE = true; // Set to true to enable chat_template_kwargs thinking parameter
+// 🔥 THINKING MODE TOGGLE - Enables thinking for specific models
+const ENABLE_THINKING_MODE = true; 
 
-// Model mapping (adjust based on available NIM models)
+// Model mapping
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
   'gpt-4': 'z-ai/glm5',
@@ -41,7 +44,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// List models endpoint (OpenAI compatible)
+// List models endpoint
 app.get('/v1/models', (req, res) => {
   const models = Object.keys(MODEL_MAPPING).map(model => ({
     id: model,
@@ -50,13 +53,10 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   }));
   
-  res.json({
-    object: 'list',
-    data: models
-  });
+  res.json({ object: 'list', data: models });
 });
 
-// Chat completions endpoint (main proxy)
+// Chat completions endpoint
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
@@ -96,7 +96,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       model: nimModel,
       messages: messages,
       temperature: temperature || 0.6,
-      max_tokens: max_tokens || 100000,
+      // FIX: Default to 4096 instead of 100,000 to prevent NIM API rejection
+      max_tokens: max_tokens || 4096, 
       extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
       stream: stream || false
     };
@@ -107,20 +108,22 @@ app.post('/v1/chat/completions', async (req, res) => {
         'Authorization': `Bearer ${NIM_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      responseType: stream ? 'stream' : 'json'
+      responseType: stream ? 'stream' : 'json',
+      // FIX: 10-minute timeout for deep thinking models
+      timeout: 600000 
     });
     
     if (stream) {
-      // Handle streaming response with reasoning
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       
       let buffer = '';
       let reasoningStarted = false;
+      const decoder = new StringDecoder('utf8'); // Decodes stream safely
       
       response.data.on('data', (chunk) => {
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         
@@ -175,7 +178,11 @@ app.post('/v1/chat/completions', async (req, res) => {
         });
       });
       
-      response.data.on('end', () => res.end());
+      response.data.on('end', () => {
+        buffer += decoder.end();
+        res.end();
+      });
+      
       response.data.on('error', (err) => {
         console.error('Stream error:', err);
         res.end();
@@ -215,7 +222,6 @@ app.post('/v1/chat/completions', async (req, res) => {
     
   } catch (error) {
     console.error('Proxy error:', error.message);
-    
     res.status(error.response?.status || 500).json({
       error: {
         message: error.message || 'Internal server error',
@@ -226,7 +232,6 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
 });
 
-// Catch-all for unsupported endpoints
 app.all('*', (req, res) => {
   res.status(404).json({
     error: {
@@ -237,7 +242,7 @@ app.all('*', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`OpenAI to NVIDIA NIM Proxy running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
