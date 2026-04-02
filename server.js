@@ -32,6 +32,7 @@ const MODEL_MAPPING = {
   'claude-3-opus': 'moonshotai/kimi-k2-thinking',
   'claude-3-sonnet': 'z-ai/glm4.7',
   'gemini-pro': 'qwen/qwen3.5-397b-a17b' 
+  'gpt-4-0613': 'deepseek-ai/deepseek-v3.1-terminus'
 };
 
 // Health check endpoint
