@@ -2,14 +2,13 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { StringDecoder } = require('string_decoder'); // FIX: Handles multi-byte stream characters safely
+const { StringDecoder } = require('string_decoder'); 
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-// FIX: Increased payload limit to 50MB to prevent "413 Payload Too Large"
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -18,10 +17,10 @@ const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.c
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 // 🔥 REASONING DISPLAY TOGGLE - Shows/hides reasoning in output
-const SHOW_REASONING = false; 
+const SHOW_REASONING = true; 
 
 // 🔥 THINKING MODE TOGGLE - Enables thinking for specific models
-const ENABLE_THINKING_MODE = false; 
+const ENABLE_THINKING_MODE = true; 
 
 // Model mapping
 const MODEL_MAPPING = {
@@ -72,12 +71,14 @@ app.post('/v1/chat/completions', async (req, res) => {
         }, {
           headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
           validateStatus: (status) => status < 500
-        }).then(res => {
-          if (res.status >= 200 && res.status < 300) {
+        }).then(response => {
+          if (response.status >= 200 && response.status < 300) {
             nimModel = model;
           }
         });
-      } catch (e) {}
+      } catch (e) {
+        // Silently catch fallback probe errors
+      }
       
       if (!nimModel) {
         const modelLower = model.toLowerCase();
@@ -91,14 +92,18 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
     
+    // NEW FIX: Only apply extra_body to models that actually support it
+    const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
+    
     // Transform OpenAI request to NIM format
     const nimRequest = {
       model: nimModel,
       messages: messages,
       temperature: temperature || 0.6,
-      // FIX: Default to 4096 instead of 100,000 to prevent NIM API rejection
       max_tokens: max_tokens || 4096, 
-      extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
+      extra_body: (ENABLE_THINKING_MODE && supportsThinking) 
+        ? { chat_template_kwargs: { thinking: true } } 
+        : undefined,
       stream: stream || false
     };
     
@@ -109,7 +114,6 @@ app.post('/v1/chat/completions', async (req, res) => {
         'Content-Type': 'application/json'
       },
       responseType: stream ? 'stream' : 'json',
-      // FIX: 10-minute timeout for deep thinking models
       timeout: 600000 
     });
     
@@ -120,7 +124,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       
       let buffer = '';
       let reasoningStarted = false;
-      const decoder = new StringDecoder('utf8'); // Decodes stream safely
+      const decoder = new StringDecoder('utf8'); 
       
       response.data.on('data', (chunk) => {
         buffer += decoder.write(chunk);
@@ -172,6 +176,7 @@ app.post('/v1/chat/completions', async (req, res) => {
               }
               res.write(`data: ${JSON.stringify(data)}\n\n`);
             } catch (e) {
+              // Only write if we couldn't parse it but it looks like standard SSE
               res.write(line + '\n');
             }
           }
@@ -180,13 +185,21 @@ app.post('/v1/chat/completions', async (req, res) => {
       
       response.data.on('end', () => {
         buffer += decoder.end();
-        res.end();
+        if (!res.writableEnded) res.end();
       });
       
       response.data.on('error', (err) => {
-        console.error('Stream error:', err);
-        res.end();
+        console.error('Stream error:', err.message);
+        if (!res.writableEnded) res.end();
       });
+
+      // Handle client disconnects to prevent memory leaks
+      req.on('close', () => {
+        if (!response.data.destroyed) {
+            response.data.destroy();
+        }
+      });
+
     } else {
       // Transform NIM response to OpenAI format with reasoning
       const openaiResponse = {
@@ -222,6 +235,14 @@ app.post('/v1/chat/completions', async (req, res) => {
     
   } catch (error) {
     console.error('Proxy error:', error.message);
+    
+    // NEW FIX: Prevent "Cannot set headers after they are sent" crash
+    if (res.headersSent) {
+        console.error('Error occurred mid-stream. Ending stream.');
+        res.end();
+        return;
+    }
+
     res.status(error.response?.status || 500).json({
       error: {
         message: error.message || 'Internal server error',
@@ -247,4 +268,9 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
   console.log(`Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
+  
+  // Startup check
+  if (!NIM_API_KEY) {
+      console.warn('\n⚠️  WARNING: NIM_API_KEY environment variable is missing!');
+  }
 });
