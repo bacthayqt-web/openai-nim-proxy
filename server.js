@@ -94,6 +94,14 @@ app.post('/v1/chat/completions', async (req, res) => {
     
     // NEW FIX: Only apply extra_body to models that actually support it
     const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
+
+// ENHANCEMENT: Force formatting and paragraph breaks
+    // Prepending a system message ensures the model prioritizes readability.
+    const formattingNudge = { 
+        role: 'system', 
+        content: 'Format your response using Markdown. Use double line breaks between paragraphs for readability.' 
+    };
+    const enhancedMessages = [formattingNudge, ...messages];
     
     // Transform OpenAI request to NIM format
     const nimRequest = {
