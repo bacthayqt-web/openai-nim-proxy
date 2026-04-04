@@ -57,26 +57,19 @@ app.post('/v1/chat/completions', async (req, res) => {
     };
     const enhancedMessages = [formattingNudge, ...messages];
 
-    // 3. Update the filter to include GLM
-const isDeepseek = nimModel.includes('deepseek');
-const isGLM = nimModel.includes('glm');
-const supportsThinking = isDeepseek || isGLM || nimModel.includes('thinking');
-
-// 4. Use a more robust extra_body
-const nimRequest = {
-  model: nimModel,
-  messages: enhancedMessages,
-  temperature: temperature || 0.7,
-  max_tokens: max_tokens || 4096, 
-  extra_body: (ENABLE_THINKING_MODE && supportsThinking) 
-    ? { 
-        chat_template_kwargs: { thinking: true }, // Compatibility for older NIMs
-        reasoning: true,                         // Required for DeepSeek v3.2+
-        enable_reasoning: true                   // Fallback for GLM 5 
-      } 
-    : undefined,
-  stream: stream || false
-};
+    // 3. GLM 4.7 FIX: Only apply extra_body to supported models
+    const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
+    
+    const nimRequest = {
+      model: nimModel,
+      messages: enhancedMessages,
+      temperature: temperature || 0.7, // Slightly increased for better variety in structure
+      max_tokens: max_tokens || 4096, 
+      extra_body: (ENABLE_THINKING_MODE && supportsThinking) 
+        ? { chat_template_kwargs: { thinking: true } } 
+        : undefined,
+      stream: stream || false
+    };
     
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
       headers: {
