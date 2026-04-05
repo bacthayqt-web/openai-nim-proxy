@@ -50,12 +50,24 @@ app.post('/v1/chat/completions', async (req, res) => {
     let nimModel = MODEL_MAPPING[model] || model; 
     
     // 2. ENHANCEMENT: Force formatting and paragraph breaks
-    // Prepending a system message ensures the model prioritizes readability.
+    // Deepened the system prompt to be more restrictive against walls of text
     const formattingNudge = { 
         role: 'system', 
-        content: 'Format your response using Markdown. Use double line breaks between paragraphs for readability.' 
+        content: 'CRITICAL INSTRUCTION: You MUST format your response using Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs to ensure readability. Never output a single continuous wall of text. Break down long explanations into smaller, digestible paragraphs.' 
     };
-    const enhancedMessages = [formattingNudge, ...messages];
+    let enhancedMessages = [formattingNudge, ...messages];
+
+    // GLM SPECIFIC FIX: GLM models often suffer from "system prompt amnesia" 
+    // Appending an explicit formatting request to the final user prompt heavily forces compliance.
+    if (nimModel.includes('glm')) {
+        const lastIndex = enhancedMessages.length - 1;
+        if (lastIndex >= 0 && enhancedMessages[lastIndex].role === 'user') {
+            enhancedMessages[lastIndex] = {
+                ...enhancedMessages[lastIndex],
+                content: enhancedMessages[lastIndex].content + '\n\n[Formatting Rule: Structure your response into clear, separate paragraphs. Use double line breaks between paragraphs. Do not return a wall of text.]'
+            };
+        }
+    }
 
     // 3. GLM 4.7 FIX: Only apply extra_body to supported models
     const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
