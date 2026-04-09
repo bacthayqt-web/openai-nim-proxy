@@ -1,3 +1,6 @@
+// server.js - OpenAI to NVIDIA NIM API Proxy
+// Includes: GLM Fixes, Formatting Nudges, History Rail Guard, and Strict Frontend (Chub AI) Stream Fixes
+
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -25,8 +28,9 @@ const MODEL_MAPPING = {
 
 // --- Middleware ---
 app.use(cors()); 
-app.use(express.json({ limit: '5mb' })); // Reduced for security
-app.use(express.urlencoded({ limit: '5mb', extended: true }));
+// Payload limit kept at 50mb to prevent "413 Payload Too Large" on massive multi-turn chats
+app.use(express.json({ limit: '50mb' })); 
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- Helpers ---
 const getEnhancedMessages = (model, messages) => {
@@ -35,8 +39,21 @@ const getEnhancedMessages = (model, messages) => {
         content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.' 
     };
     
-    let enhanced = [formattingNudge, ...messages];
+    // 🛡️ RAIL GUARD: Strip <think> blocks from previous assistant messages.
+    // Prevents strict frontends from feeding the thoughts back into the context history.
+    const cleanedMessages = messages.map(msg => {
+        if (msg.role === 'assistant' && typeof msg.content === 'string') {
+            return {
+                ...msg,
+                content: msg.content.replace(/<think>[\s\S]*?<\/think>\n*/g, '').trim()
+            };
+        }
+        return msg;
+    });
 
+    let enhanced = [formattingNudge, ...cleanedMessages];
+
+    // GLM-specific nudge for better output adherence
     if (model.includes('glm')) {
         const lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
@@ -53,7 +70,12 @@ const getEnhancedMessages = (model, messages) => {
 app.get('/health', (req, res) => res.json({ status: 'ok', reasoning_display: SHOW_REASONING }));
 
 app.get('/v1/models', (req, res) => {
-    const models = Object.keys(MODEL_MAPPING).map(id => ({ id, object: 'model', created: Date.now(), owned_by: 'nvidia-nim-proxy' }));
+    const models = Object.keys(MODEL_MAPPING).map(id => ({ 
+        id, 
+        object: 'model', 
+        created: Date.now(), 
+        owned_by: 'nvidia-nim-proxy' 
+    }));
     res.json({ object: 'list', data: models });
 });
 
@@ -64,14 +86,24 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         const nimModel = MODEL_MAPPING[model] || model;
         const enhancedMessages = getEnhancedMessages(nimModel, messages);
-        const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
+        
+        // Comprehensive check for reasoning models (Deepseek & GLM)
+        const isDeepseek = nimModel.includes('deepseek');
+        const isGLM = nimModel.includes('glm');
+        const supportsThinking = isDeepseek || isGLM || nimModel.includes('thinking');
 
         const nimRequest = {
             model: nimModel,
             messages: enhancedMessages,
             temperature: temperature ?? 0.7,
             max_tokens: max_tokens ?? 4096,
-            extra_body: (ENABLE_THINKING_MODE && supportsThinking) ? { chat_template_kwargs: { thinking: true } } : undefined,
+            extra_body: (ENABLE_THINKING_MODE && supportsThinking) 
+                ? { 
+                    chat_template_kwargs: { thinking: true },
+                    reasoning: true,       // Required for DeepSeek v3.2+
+                    enable_reasoning: true // Fallback for GLM
+                  } 
+                : undefined,
             stream: stream || false
         };
 
@@ -79,6 +111,13 @@ app.post('/v1/chat/completions', async (req, res) => {
             headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
             responseType: stream ? 'stream' : 'json',
             timeout: 600000
+        });
+
+        // Ensure clean memory cleanup if client disconnects early
+        req.on('close', () => {
+            if (stream && !response.data.destroyed) {
+                response.data.destroy();
+            }
         });
 
         if (stream) {
@@ -92,10 +131,13 @@ app.post('/v1/chat/completions', async (req, res) => {
             res.status(error.response?.status || 500).json({ 
                 error: { message: error.message, code: error.response?.status || 500 } 
             });
+        } else {
+            res.end();
         }
     }
 });
 
+// --- Stream Handlers ---
 function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -103,11 +145,12 @@ function handleStream(inputStream, res) {
 
     let buffer = '';
     let reasoningActive = false;
+    let isFirstChunk = true; // Required for strict frontends
     const decoder = new StringDecoder('utf8');
 
     inputStream.on('data', (chunk) => {
         buffer += decoder.write(chunk);
-        let lines = buffer.split(/\r?\n/); // Fix: Handle CRLF
+        let lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || '';
 
         for (const line of lines) {
@@ -122,23 +165,44 @@ function handleStream(inputStream, res) {
                     const data = JSON.parse(dataStr);
                     const delta = data.choices?.[0]?.delta;
 
-                    if (delta && SHOW_REASONING) {
+                    if (delta) {
+                        // 🛡️ CHUB AI FIX 1: Prevent crash on `null` content
+                        if (delta.content === null) {
+                            delta.content = '';
+                        }
+
+                        // 🛡️ CHUB AI FIX 2: Inject role on first chunk
+                        if (isFirstChunk) {
+                            delta.role = 'assistant';
+                            isFirstChunk = false;
+                        }
+
                         const reasoning = delta.reasoning_content;
                         const content = delta.content;
 
-                        if (reasoning) {
-                            if (!reasoningActive) {
-                                delta.content = `<think>\n${reasoning}`;
-                                reasoningActive = true;
-                            } else {
-                                delta.content = reasoning;
+                        if (SHOW_REASONING) {
+                            if (reasoning) {
+                                if (!reasoningActive) {
+                                    delta.content = `<think>\n${reasoning}`;
+                                    reasoningActive = true;
+                                } else {
+                                    delta.content = reasoning;
+                                }
+                            // 🛡️ CHUB AI FIX 3: Check `!== undefined` instead of `if (content)` for falsy empty strings
+                            } else if (reasoningActive && content !== undefined) {
+                                delta.content = `\n</think>\n\n${content}`;
+                                reasoningActive = false;
                             }
-                            delete delta.reasoning_content;
-                        } else if (content && reasoningActive) {
-                            delta.content = `\n</think>\n\n${content}`;
-                            reasoningActive = false;
+                        } else {
+                            if (reasoning && !content) {
+                                delta.content = '';
+                            }
                         }
+                        
+                        // Always delete reasoning_content to prevent frontend parser errors
+                        delete delta.reasoning_content;
                     }
+                    
                     res.write(`data: ${JSON.stringify(data)}\n\n`);
                 } catch (e) {
                     // Silently skip malformed JSON lines
@@ -152,7 +216,12 @@ function handleStream(inputStream, res) {
             // Close think tag if the stream ended while still thinking
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '\n</think>' } }] })}\n\n`);
         }
-        res.end();
+        if (!res.writableEnded) res.end();
+    });
+
+    inputStream.on('error', (err) => {
+        console.error('Stream Input Error:', err.message);
+        if (!res.writableEnded) res.end();
     });
 }
 
@@ -179,6 +248,6 @@ function handleNonStream(data, model, res) {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Proxy running on port ${PORT}`);
+    console.log(`🚀 NVIDIA NIM Proxy running on port ${PORT}`);
     if (!NIM_API_KEY) console.warn('⚠️ WARNING: NIM_API_KEY is missing!');
 });
