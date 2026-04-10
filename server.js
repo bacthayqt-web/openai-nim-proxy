@@ -1,6 +1,3 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy
-// Includes: GLM Fixes, Formatting Nudges, History Rail Guard, and Strict Frontend (Chub AI) Stream Fixes
-
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -28,9 +25,8 @@ const MODEL_MAPPING = {
 
 // --- Middleware ---
 app.use(cors()); 
-// Payload limit kept at 50mb to prevent "413 Payload Too Large" on massive multi-turn chats
-app.use(express.json({ limit: '50mb' })); 
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '5mb' })); // Reduced for security
+app.use(express.urlencoded({ limit: '5mb', extended: true }));
 
 // --- Helpers ---
 const getEnhancedMessages = (model, messages) => {
@@ -39,21 +35,8 @@ const getEnhancedMessages = (model, messages) => {
         content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.' 
     };
     
-    // 🛡️ RAIL GUARD: Strip <think> blocks from previous assistant messages.
-    // Prevents strict frontends from feeding the thoughts back into the context history.
-    const cleanedMessages = messages.map(msg => {
-        if (msg.role === 'assistant' && typeof msg.content === 'string') {
-            return {
-                ...msg,
-                content: msg.content.replace(/<think>[\s\S]*?<\/think>\n*/g, '').trim()
-            };
-        }
-        return msg;
-    });
+    let enhanced = [formattingNudge, ...messages];
 
-    let enhanced = [formattingNudge, ...cleanedMessages];
-
-    // GLM-specific nudge for better output adherence
     if (model.includes('glm')) {
         const lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
@@ -70,12 +53,7 @@ const getEnhancedMessages = (model, messages) => {
 app.get('/health', (req, res) => res.json({ status: 'ok', reasoning_display: SHOW_REASONING }));
 
 app.get('/v1/models', (req, res) => {
-    const models = Object.keys(MODEL_MAPPING).map(id => ({ 
-        id, 
-        object: 'model', 
-        created: Date.now(), 
-        owned_by: 'nvidia-nim-proxy' 
-    }));
+    const models = Object.keys(MODEL_MAPPING).map(id => ({ id, object: 'model', created: Date.now(), owned_by: 'nvidia-nim-proxy' }));
     res.json({ object: 'list', data: models });
 });
 
@@ -86,24 +64,14 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         const nimModel = MODEL_MAPPING[model] || model;
         const enhancedMessages = getEnhancedMessages(nimModel, messages);
-        
-        // Comprehensive check for reasoning models (Deepseek & GLM)
-        const isDeepseek = nimModel.includes('deepseek');
-        const isGLM = nimModel.includes('glm');
-        const supportsThinking = isDeepseek || isGLM || nimModel.includes('thinking');
+        const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
 
         const nimRequest = {
             model: nimModel,
             messages: enhancedMessages,
             temperature: temperature ?? 0.7,
             max_tokens: max_tokens ?? 4096,
-            extra_body: (ENABLE_THINKING_MODE && supportsThinking) 
-                ? { 
-                    chat_template_kwargs: { thinking: true },
-                    reasoning: true,       // Required for DeepSeek v3.2+
-                    enable_reasoning: true // Fallback for GLM
-                  } 
-                : undefined,
+            extra_body: (ENABLE_THINKING_MODE && supportsThinking) ? { chat_template_kwargs: { thinking: true } } : undefined,
             stream: stream || false
         };
 
@@ -111,13 +79,6 @@ app.post('/v1/chat/completions', async (req, res) => {
             headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
             responseType: stream ? 'stream' : 'json',
             timeout: 600000
-        });
-
-        // Ensure clean memory cleanup if client disconnects early
-        req.on('close', () => {
-            if (stream && !response.data.destroyed) {
-                response.data.destroy();
-            }
         });
 
         if (stream) {
@@ -131,13 +92,10 @@ app.post('/v1/chat/completions', async (req, res) => {
             res.status(error.response?.status || 500).json({ 
                 error: { message: error.message, code: error.response?.status || 500 } 
             });
-        } else {
-            res.end();
         }
     }
 });
 
-// --- Stream Handlers ---
 function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -145,7 +103,7 @@ function handleStream(inputStream, res) {
 
     let buffer = '';
     let reasoningActive = false;
-    let isFirstChunk = true; // Required for strict frontends
+    let isFirstChunk = true; // Added for strict frontends like Chub
     const decoder = new StringDecoder('utf8');
 
     inputStream.on('data', (chunk) => {
@@ -166,12 +124,13 @@ function handleStream(inputStream, res) {
                     const delta = data.choices?.[0]?.delta;
 
                     if (delta) {
-                        // 🛡️ CHUB AI FIX 1: Prevent crash on `null` content
+                        // 🛡️ FIX 2A: CHUB AI CRASH PREVENTION
+                        // Chub AI will crash and show an empty response if content is exactly `null`.
                         if (delta.content === null) {
                             delta.content = '';
                         }
 
-                        // 🛡️ CHUB AI FIX 2: Inject role on first chunk
+                        // Chub AI also expects the very first chunk to explicitly declare the role
                         if (isFirstChunk) {
                             delta.role = 'assistant';
                             isFirstChunk = false;
@@ -188,18 +147,21 @@ function handleStream(inputStream, res) {
                                 } else {
                                     delta.content = reasoning;
                                 }
-                            // 🛡️ CHUB AI FIX 3: Check `!== undefined` instead of `if (content)` for falsy empty strings
                             } else if (reasoningActive && content !== undefined) {
+                                // 🛡️ FIX 2B: THE FALSY BUG
+                                // We check `!== undefined` instead of `if (content)`. 
+                                // Otherwise, an empty string `""` skips this and breaks the output.
                                 delta.content = `\n</think>\n\n${content}`;
                                 reasoningActive = false;
                             }
                         } else {
+                            // If reasoning is hidden, ensure we don't accidentally send empty chunks
                             if (reasoning && !content) {
                                 delta.content = '';
                             }
                         }
                         
-                        // Always delete reasoning_content to prevent frontend parser errors
+                        // Always delete reasoning_content so strict frontends don't trip over unrecognized fields
                         delete delta.reasoning_content;
                     }
                     
@@ -216,12 +178,7 @@ function handleStream(inputStream, res) {
             // Close think tag if the stream ended while still thinking
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '\n</think>' } }] })}\n\n`);
         }
-        if (!res.writableEnded) res.end();
-    });
-
-    inputStream.on('error', (err) => {
-        console.error('Stream Input Error:', err.message);
-        if (!res.writableEnded) res.end();
+        res.end();
     });
 }
 
@@ -248,6 +205,6 @@ function handleNonStream(data, model, res) {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 NVIDIA NIM Proxy running on port ${PORT}`);
+    console.log(`🚀 Proxy running on port ${PORT}`);
     if (!NIM_API_KEY) console.warn('⚠️ WARNING: NIM_API_KEY is missing!');
 });
