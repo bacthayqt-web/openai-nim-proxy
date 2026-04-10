@@ -113,6 +113,7 @@ function handleStream(inputStream, res, nimModel) {
     let reasoningActive = false;
     const decoder = new StringDecoder('utf8');
     let firstChunk = true;
+    const isThinkingModel = nimModel.includes('thinking') || nimModel.includes('deepseek');
 
     inputStream.on('data', (chunk) => {
         buffer += decoder.write(chunk);
@@ -137,14 +138,29 @@ function handleStream(inputStream, res, nimModel) {
 
                         if (reasoning) {
                             if (!reasoningActive) {
-                                delta.content = `<think>\n${reasoning}`;
+                                // For thinking models, don't include reasoning in main content
+                                if (isThinkingModel) {
+                                    delta.content = '';
+                                } else {
+                                    delta.content = `<think>\n${reasoning}`;
+                                }
                                 reasoningActive = true;
                             } else {
-                                delta.content = reasoning;
+                                // For thinking models, don't include reasoning in main content
+                                if (isThinkingModel) {
+                                    delta.content = '';
+                                } else {
+                                    delta.content = reasoning;
+                                }
                             }
                             delete delta.reasoning_content;
                         } else if (content && reasoningActive) {
-                            delta.content = `\n</think>\n\n${content}`;
+                            // For thinking models, don't add think tags to main content
+                            if (isThinkingModel) {
+                                delta.content = content;
+                            } else {
+                                delta.content = `\n</think>\n\n${content}`;
+                            }
                             reasoningActive = false;
                         }
                     }
