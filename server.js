@@ -100,16 +100,16 @@ function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-
+    
     let buffer = '';
     let reasoningActive = false;
-    let isFirstChunk = true; // Added for strict frontends like Chub
+    let isFirstChunk = true;
     const decoder = new StringDecoder('utf8');
 
     inputStream.on('data', (chunk) => {
         buffer += decoder.write(chunk);
         let lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || '';
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
         for (const line of lines) {
             if (line.startsWith('data: ')) {
@@ -118,69 +118,91 @@ function handleStream(inputStream, res) {
                     res.write('data: [DONE]\n\n');
                     continue;
                 }
-
+                
                 try {
                     const data = JSON.parse(dataStr);
-                    const delta = data.choices?.[0]?.delta;
-
-                    if (delta) {
-                        // 🛡️ FIX 2A: CHUB AI CRASH PREVENTION
-                        // Chub AI will crash and show an empty response if content is exactly `null`.
-                        if (delta.content === null) {
-                            delta.content = '';
-                        }
-
-                        // Chub AI also expects the very first chunk to explicitly declare the role
-                        if (isFirstChunk) {
-                            delta.role = 'assistant';
-                            isFirstChunk = false;
-                        }
-
-                        const reasoning = delta.reasoning_content;
-                        const content = delta.content;
-
-                        if (SHOW_REASONING) {
-                            if (reasoning) {
-                                if (!reasoningActive) {
-                                    delta.content = `<think>\n${reasoning}`;
-                                    reasoningActive = true;
-                                } else {
-                                    delta.content = reasoning;
-                                }
-                            } else if (reasoningActive && content !== undefined) {
-                                // 🛡️ FIX 2B: THE FALSY BUG
-                                // We check `!== undefined` instead of `if (content)`. 
-                                // Otherwise, an empty string `""` skips this and breaks the output.
-                                delta.content = `\n</think>\n\n${content}`;
-                                reasoningActive = false;
-                            }
-                        } else {
-                            // If reasoning is hidden, ensure we don't accidentally send empty chunks
-                            if (reasoning && !content) {
-                                delta.content = '';
-                            }
-                        }
-                        
-                        // Always delete reasoning_content so strict frontends don't trip over unrecognized fields
-                        delete delta.reasoning_content;
+                    const delta = data.choices?.[0]?.delta || {};
+                    
+                    // Ensure content is never null
+                    if (delta.content === null) {
+                        delta.content = '';
                     }
+                    
+                    // Add role to first chunk for strict frontends
+                    if (isFirstChunk) {
+                        delta.role = 'assistant';
+                        isFirstChunk = false;
+                    }
+
+                    const reasoning = delta.reasoning_content;
+                    const content = delta.content;
+                    let finalContent = '';
+
+                    if (SHOW_REASONING && reasoning !== undefined) {
+                        if (!reasoningActive) {
+                            finalContent = ` <think> \n${reasoning}`;
+                            reasoningActive = true;
+                        } else {
+                            finalContent = reasoning;
+                        }
+                    }
+                    
+                    // FIX: Only add content if it's not undefined
+                    // This preserves content that arrives with reasoning
+                    if (content !== undefined) {
+                        if (reasoningActive && reasoning === undefined) {
+                            // End reasoning, start content
+                            finalContent = `\n <think> \n\n${content}`;
+                            reasoningActive = false;
+                        } else if (!reasoningActive) {
+                            // Regular content without reasoning
+                            finalContent = content;
+                        }
+                        // If we have BOTH reasoning and content, we need both
+                        if (reasoningActive && reasoning !== undefined && content !== '') {
+                            finalContent = ` <think> \n${reasoning}\n\n${content}`;
+                            reasoningActive = false;
+                        }
+                    }
+
+                    if (finalContent !== '') {
+                        delta.content = finalContent;
+                    }
+                    
+                    // Always delete reasoning_content to avoid frontend errors
+                    delete delta.reasoning_content;
                     
                     res.write(`data: ${JSON.stringify(data)}\n\n`);
                 } catch (e) {
-                    // Silently skip malformed JSON lines
+                    // Skip malformed JSON lines
                 }
             }
         }
     });
 
     inputStream.on('end', () => {
-        if (reasoningActive) {
-            // Close think tag if the stream ended while still thinking
-            res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '\n</think>' } }] })}\n\n`);
+        // FIX: Process any remaining data in buffer
+        if (buffer.startsWith('data: ')) {
+            try {
+                const dataStr = buffer.slice(6).trim();
+                if (dataStr !== '[DONE]') {
+                    const data = JSON.parse(dataStr);
+                    // Process final delta if needed
+                    res.write(`data: ${JSON.stringify(data)}\n\n`);
+                }
+            } catch (e) {
+                // Ignore parse errors on final buffer
+            }
         }
+        
+        if (reasoningActive) {
+            res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '\n <think> ' } }] })}\n\n`);
+        }
+        res.write('data: [DONE]\n\n');
         res.end();
     });
 }
+
 
 function handleNonStream(data, model, res) {
     const openaiResponse = {
