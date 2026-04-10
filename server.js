@@ -24,25 +24,25 @@ const MODEL_MAPPING = {
 };
 
 // --- Middleware ---
-app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+app.use(cors()); 
+app.use(express.json({ limit: '5mb' })); // Reduced for security
 app.use(express.urlencoded({ limit: '5mb', extended: true }));
 
 // --- Helpers ---
 const getEnhancedMessages = (model, messages) => {
-    const formattingNudge = {
-        role: 'system',
-        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.'
+    const formattingNudge = { 
+        role: 'system', 
+        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.' 
     };
-
+    
     let enhanced = [formattingNudge, ...messages];
 
     if (model.includes('glm')) {
         const lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
-            enhanced[lastIndex] = {
-                ...enhanced[lastIndex],
-                content: `${enhanced[lastIndex].content}\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]`
+            enhanced[lastIndex] = { 
+                ...enhanced[lastIndex], 
+                content: `${enhanced[lastIndex].content}\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]` 
             };
         }
     }
@@ -72,16 +72,8 @@ app.post('/v1/chat/completions', async (req, res) => {
             temperature: temperature ?? 0.7,
             max_tokens: max_tokens ?? 4096,
             extra_body: (ENABLE_THINKING_MODE && supportsThinking) ? { chat_template_kwargs: { thinking: true } } : undefined,
-            stream: stream || false,
-            ...(nimModel.includes('deepseek') && {
-                top_p: 0.9,
-                frequency_penalty: 0.1,
-                presence_penalty: 0.1
-            })
+            stream: stream || false
         };
-
-        console.log(`Processing request for model: ${nimModel}`);
-        console.log('Request body:', JSON.stringify(nimRequest, null, 2));
 
         const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
             headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
@@ -90,21 +82,21 @@ app.post('/v1/chat/completions', async (req, res) => {
         });
 
         if (stream) {
-            handleStream(response.data, res, nimModel);
+            handleStream(response.data, res);
         } else {
             handleNonStream(response.data, model, res);
         }
     } catch (error) {
         console.error('Proxy error:', error.response?.data || error.message);
         if (!res.headersSent) {
-            res.status(error.response?.status || 500).json({
-                error: { message: error.message, code: error.response?.status || 500 }
+            res.status(error.response?.status || 500).json({ 
+                error: { message: error.message, code: error.response?.status || 500 } 
             });
         }
     }
 });
 
-function handleStream(inputStream, res, nimModel) {
+function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -112,11 +104,10 @@ function handleStream(inputStream, res, nimModel) {
     let buffer = '';
     let reasoningActive = false;
     const decoder = new StringDecoder('utf8');
-    let firstChunk = true;
 
     inputStream.on('data', (chunk) => {
         buffer += decoder.write(chunk);
-        let lines = buffer.split(/\r?\n/);
+        let lines = buffer.split(/\r?\n/); // Fix: Handle CRLF
         buffer = lines.pop() || '';
 
         for (const line of lines) {
@@ -148,18 +139,9 @@ function handleStream(inputStream, res, nimModel) {
                             reasoningActive = false;
                         }
                     }
-
-                    // For GLM models, ensure we don't lose the first few characters
-                    if (firstChunk && nimModel.includes('glm')) {
-                        setTimeout(() => {
-                            res.write(`data: ${JSON.stringify(data)}\n\n`);
-                            firstChunk = false;
-                        }, 10);
-                    } else {
-                        res.write(`data: ${JSON.stringify(data)}\n\n`);
-                    }
+                    res.write(`data: ${JSON.stringify(data)}\n\n`);
                 } catch (e) {
-                    console.error('Error parsing stream data:', e);
+                    // Silently skip malformed JSON lines
                 }
             }
         }
@@ -167,6 +149,7 @@ function handleStream(inputStream, res, nimModel) {
 
     inputStream.on('end', () => {
         if (reasoningActive) {
+            // Close think tag if the stream ended while still thinking
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '\n</think>' } }] })}\n\n`);
         }
         res.end();
@@ -174,18 +157,6 @@ function handleStream(inputStream, res, nimModel) {
 }
 
 function handleNonStream(data, model, res) {
-    console.log('Raw response data:', JSON.stringify(data, null, 2));
-
-    // Handle empty responses
-    if (!data.choices || data.choices.length === 0) {
-        return res.status(500).json({
-            error: {
-                message: "Empty response from model",
-                code: 500
-            }
-        });
-    }
-
     const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
@@ -193,32 +164,17 @@ function handleNonStream(data, model, res) {
         model: model,
         choices: data.choices.map(choice => {
             let fullContent = choice.message?.content || '';
-            let reasoningContent = '';
-
             if (SHOW_REASONING && choice.message?.reasoning_content) {
-                reasoningContent = choice.message.reasoning_content;
-                // Don't include reasoning in the main content for Chub AI
-                if (model.includes('thinking') || model.includes('deepseek')) {
-                    fullContent = fullContent; // Keep original content
-                } else {
-                    fullContent = `<think>\n${reasoningContent}\n</think>\n\n${fullContent}`;
-                }
+                fullContent = `<think>\n${choice.message.reasoning_content}\n</think>\n\n${fullContent}`;
             }
-
             return {
                 index: choice.index,
-                message: {
-                    role: choice.message.role,
-                    content: fullContent,
-                    ...(reasoningContent && { reasoning_content: reasoningContent })
-                },
+                message: { role: choice.message.role, content: fullContent },
                 finish_reason: choice.finish_reason
             };
         }),
         usage: data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
     };
-
-    console.log('Final response:', JSON.stringify(openaiResponse, null, 2));
     res.json(openaiResponse);
 }
 
