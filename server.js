@@ -30,25 +30,44 @@ app.use(express.urlencoded({ limit: '5mb', extended: true }));
 
 // --- Helpers ---
 const getEnhancedMessages = (model, messages) => {
-    const formattingNudge = { 
+    // 1. Stricter System Prompt
+    const systemPrompt = { 
         role: 'system', 
-        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.' 
+        content: 'CRITICAL INSTRUCTION: You are an assistant that prioritizes formatting and readability. You MUST use Markdown. You MUST break your output into short paragraphs separated by double line breaks (\\n\\n). NEVER output a wall of text.' 
     };
     
-    let enhanced = [formattingNudge, ...messages];
+    let enhanced = [systemPrompt];
 
+    // 2. Few-Shot Injection (The "Fake Agreement" Trick for GLM)
+    // We insert a fake history where the AI explicitly commits to the formatting.
+    if (model.includes('glm')) {
+        enhanced.push({ 
+            role: 'user', 
+            content: 'Before we begin, do you promise to break your responses into multiple short paragraphs separated by blank lines, and avoid walls of text?' 
+        });
+        enhanced.push({ 
+            role: 'assistant', 
+            content: 'I promise. I will strictly format my answers into well-spaced, digestible paragraphs using double line breaks (\\n\\n) and absolutely avoid writing single walls of text.' 
+        });
+    }
+
+    // Append the actual user conversation
+    enhanced = enhanced.concat(messages);
+
+    // 3. The Final Nudge
+    // Reworded to sound less like system syntax and more like a direct human request
     if (model.includes('glm')) {
         const lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = { 
                 ...enhanced[lastIndex], 
-                content: `${enhanced[lastIndex].content}\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]` 
+                content: `${enhanced[lastIndex].content}\n\n(Reminder: Please ensure your response is broken into multiple paragraphs separated by blank lines.)` 
             };
         }
     }
+    
     return enhanced;
 };
-
 // --- Routes ---
 app.get('/health', (req, res) => res.json({ status: 'ok', reasoning_display: SHOW_REASONING }));
 
