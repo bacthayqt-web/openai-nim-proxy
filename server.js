@@ -1,16 +1,17 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { StringDecoder } = require('string_decoder');
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- Configuration ---
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
-const SHOW_REASONING = true;
-const ENABLE_THINKING_MODE = true;
+const SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
+const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
+const MAX_TEMPERATURE = 2.0;
+const MAX_MAX_TOKENS = 128000;
 
 const MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
@@ -37,8 +38,35 @@ const getEnhancedMessages = (model, messages) => {
         content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.'
     };
 
-    let enhanced = [formattingNudge, ...messages];
+    // Check if a similar formatting system message already exists to avoid duplicates
+    const hasFormattingInstruction = messages.some(
+        msg => msg.role === 'system' &&
+            (msg.content.includes('Markdown') ||
+             msg.content.includes('paragraph') ||
+             msg.content.includes('formatting') ||
+             msg.content.includes('CRITICAL INSTRUCTION'))
+    );
 
+    let enhanced;
+    if (hasFormattingInstruction) {
+        // Merge existing system messages to avoid duplication
+        enhanced = messages.map(msg => {
+            if (msg.role === 'system' &&
+                (msg.content.includes('Markdown') ||
+                 msg.content.includes('paragraph') ||
+                 msg.content.includes('formatting'))) {
+                return {
+                    ...msg,
+                    content: `${formattingNudge.content}\n\n${msg.content}`
+                };
+            }
+            return msg;
+        });
+    } else {
+        enhanced = [formattingNudge, ...messages];
+    }
+
+    // Add formatting hint for GLM models
     if (model.includes('glm')) {
         const lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
@@ -48,11 +76,39 @@ const getEnhancedMessages = (model, messages) => {
             };
         }
     }
+
     return enhanced;
 };
 
+const validateAndSanitizeParams = (temperature, max_tokens) => {
+    let sanitizedTemp = temperature;
+    if (temperature !== undefined && temperature !== null) {
+        sanitizedTemp = Math.max(0, Math.min(MAX_TEMPERATURE, parseFloat(temperature)));
+        if (isNaN(sanitizedTemp)) {
+            sanitizedTemp = 0.7; // default
+        }
+    }
+
+    let sanitizedMaxTokens = max_tokens;
+    if (max_tokens !== undefined && max_tokens !== null) {
+        sanitizedMaxTokens = Math.min(MAX_MAX_TOKENS, Math.max(1, parseInt(max_tokens, 10)));
+        if (isNaN(sanitizedMaxTokens)) {
+            sanitizedMaxTokens = 4096; // default
+        }
+    }
+
+    return { temperature: sanitizedTemp ?? 0.7, max_tokens: sanitizedMaxTokens ?? 4096 };
+};
+
 // --- Routes ---
-app.get('/health', (req, res) => res.json({ status: 'ok', reasoning_display: SHOW_REASONING }));
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        reasoning_display: SHOW_REASONING,
+        thinking_mode: ENABLE_THINKING_MODE,
+        timeout_seconds: REQUEST_TIMEOUT / 1000
+    });
+});
 
 app.get('/v1/models', (req, res) => {
     const models = Object.keys(MODEL_MAPPING).map(id => ({
@@ -67,14 +123,29 @@ app.get('/v1/models', (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
     try {
         if (!NIM_API_KEY) {
-            return res.status(500).json({ error: { message: 'NIM_API_KEY missing', code: 500 } });
+            return res.status(500).json({
+                error: {
+                    message: 'NIM_API_KEY missing',
+                    code: 500
+                }
+            });
         }
 
         const { model, messages, temperature, max_tokens, stream } = req.body;
 
-        if (!messages || !Array.isArray(messages)) {
-            return res.status(400).json({ error: { message: 'Missing or invalid messages array', code: 400 } });
+        // Validate messages
+        if (!messages || !Array.isArray(messages) || messages.length === 0) {
+            return res.status(400).json({
+                error: {
+                    message: 'Missing or invalid messages array',
+                    code: 400
+                }
+            });
         }
+
+        // Validate and sanitize numeric parameters
+        const { temperature: sanitizedTemp, max_tokens: sanitizedMaxTokens } =
+            validateAndSanitizeParams(temperature, max_tokens);
 
         const wantsStream = toBoolean(stream);
         const nimModel = MODEL_MAPPING[model] || model;
@@ -84,12 +155,14 @@ app.post('/v1/chat/completions', async (req, res) => {
         const nimRequest = {
             model: nimModel,
             messages: enhancedMessages,
-            temperature: temperature ?? 0.7,
-            max_tokens: max_tokens ?? 4096,
+            temperature: sanitizedTemp,
+            max_tokens: sanitizedMaxTokens,
             stream: wantsStream,
-            ...(ENABLE_THINKING_MODE && supportsThinking
-                ? { extra_body: { chat_template_kwargs: { thinking: true } } }
-                : {})
+            ...(ENABLE_THINKING_MODE && supportsThinking ? {
+                extra_body: {
+                    chat_template_kwargs: { thinking: true }
+                }
+            } : {})
         };
 
         const response = await axios.post(
@@ -101,15 +174,22 @@ app.post('/v1/chat/completions', async (req, res) => {
                     'Content-Type': 'application/json'
                 },
                 responseType: wantsStream ? 'stream' : 'json',
-                timeout: 600000,
+                timeout: REQUEST_TIMEOUT,
                 validateStatus: () => true
             }
         );
 
         if (response.status >= 400) {
+            // Avoid double-sending if already headers sent
+            if (res.headersSent) return;
+
+            const errorMessage = response.data?.error?.message ||
+                response.data?.error?.code ||
+                'Upstream error';
+
             return res.status(response.status).json({
                 error: {
-                    message: response.data?.error || 'Upstream error',
+                    message: errorMessage,
                     code: response.status
                 }
             });
@@ -121,7 +201,12 @@ app.post('/v1/chat/completions', async (req, res) => {
             handleNonStream(response.data, model, res);
         }
     } catch (error) {
-        console.error('Proxy error:', error?.response?.data || error.message);
+        console.error('Proxy error:', {
+            message: error.message,
+            code: error.code,
+            status: error.response?.status,
+            data: error.response?.data
+        });
 
         if (!res.headersSent) {
             res.status(500).json({
@@ -138,47 +223,62 @@ function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering if present
 
-    const decoder = new StringDecoder('utf8');
     let buffer = '';
+    let partialData = '';
     let reasoningActive = false;
 
     const safeWrite = (obj) => {
         try {
-            res.write(`data: ${JSON.stringify(obj)}\n\n`);
+            const data = typeof obj === 'string' ? obj : JSON.stringify(obj);
+            res.write(`data: ${data}\n\n`);
         } catch (e) {
-            // ignore write errors
+            console.error('Stream write error:', e.message);
         }
     };
 
-    inputStream.on('data', (chunk) => {
-        buffer += decoder.write(chunk);
+    const processData = (rawData) => {
+        if (!rawData || rawData.trim() === '') return;
 
-        let lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || '';
+        if (rawData.trim() === '[DONE]') {
+            safeWrite('[DONE]');
+            return;
+        }
 
-        for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
+        try {
+            const parsed = JSON.parse(rawData);
+            const delta = parsed?.choices?.[0]?.delta;
 
-            const dataStr = line.slice(6).trim();
+            if (delta && SHOW_REASONING) {
+                const reasoning = delta.reasoning_content;
+                const content = delta.content;
 
-            if (dataStr === '[DONE]') {
-                safeWrite('[DONE]');
-                continue;
+                if (reasoning) {
+                    delta.content = reasoningActive ? reasoning : `<think>\n${reasoning}`;
+                    reasoningActive = true;
+                    delete delta.reasoning_content;
+                } else if (content && reasoningActive) {
+                    delta.content = `\n</think>\n\n${content}`;
+                    reasoningActive = false;
+                }
             }
 
+            safeWrite(parsed);
+        } catch (e) {
+            // Accumulate partial data and try to parse when we have more
+            partialData += rawData;
             try {
-                const parsed = JSON.parse(dataStr);
-                const delta = parsed?.choices?.[0]?.delta;
+                const parsed = JSON.parse(partialData);
+                partialData = '';
 
+                const delta = parsed?.choices?.[0]?.delta;
                 if (delta && SHOW_REASONING) {
                     const reasoning = delta.reasoning_content;
                     const content = delta.content;
 
                     if (reasoning) {
-                        delta.content = reasoningActive
-                            ? reasoning
-                            : `<think>\n${reasoning}`;
+                        delta.content = reasoningActive ? reasoning : `<think>\n${reasoning}`;
                         reasoningActive = true;
                         delete delta.reasoning_content;
                     } else if (content && reasoningActive) {
@@ -189,19 +289,57 @@ function handleStream(inputStream, res) {
 
                 safeWrite(parsed);
             } catch {
-                // skip malformed chunk
+                // Still incomplete, wait for more data
+                // If partialData gets too large, something is wrong - reset
+                if (partialData.length > 100000) {
+                    console.error('Partial data buffer exceeded, resetting');
+                    partialData = '';
+                }
             }
+        }
+    };
+
+    inputStream.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const dataStr = line.slice(6);
+            processData(dataStr);
         }
     });
 
     inputStream.on('end', () => {
-        if (reasoningActive) {
-            safeWrite({ choices: [{ delta: { content: '\n</think>' } }] });
+        // Process any remaining data in buffer
+        if (buffer.startsWith('data: ')) {
+            processData(buffer.slice(6));
         }
+
+        // Close reasoning block if still open
+        if (reasoningActive) {
+            safeWrite({
+                choices: [{
+                    delta: { content: '\n</think>' }
+                }]
+            });
+        }
+
+        safeWrite('[DONE]');
         res.end();
     });
 
-    inputStream.on('error', () => {
+    inputStream.on('error', (err) => {
+        console.error('Stream error:', err.message);
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: {
+                    message: 'Stream processing error',
+                    code: 500
+                }
+            });
+        }
         res.end();
     });
 }
@@ -213,7 +351,7 @@ function handleNonStream(data, model, res) {
             object: 'chat.completion',
             created: Math.floor(Date.now() / 1000),
             model,
-            choices: (data.choices || []).map(choice => {
+            choices: (data.choices || []).map((choice, index) => {
                 let fullContent = choice?.message?.content || '';
 
                 if (SHOW_REASONING && choice?.message?.reasoning_content) {
@@ -221,7 +359,7 @@ function handleNonStream(data, model, res) {
                 }
 
                 return {
-                    index: choice.index ?? 0,
+                    index: choice.index ?? index,
                     message: {
                         role: choice?.message?.role || 'assistant',
                         content: fullContent
@@ -238,11 +376,24 @@ function handleNonStream(data, model, res) {
 
         res.json(openaiResponse);
     } catch (err) {
-        res.status(500).json({ error: { message: 'Response formatting error', code: 500 } });
+        console.error('Response formatting error:', err.message);
+        res.status(500).json({
+            error: {
+                message: 'Response formatting error',
+                code: 500
+            }
+        });
     }
 }
 
+// --- Start Server ---
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Proxy running on port ${PORT}`);
-    if (!NIM_API_KEY) console.warn('⚠️ WARNING: NIM_API_KEY is missing!');
+    console.log(`   - SHOW_REASONING: ${SHOW_REASONING}`);
+    console.log(`   - ENABLE_THINKING_MODE: ${ENABLE_THINKING_MODE}`);
+    console.log(`   - REQUEST_TIMEOUT: ${REQUEST_TIMEOUT / 1000}s`);
+
+    if (!NIM_API_KEY) {
+        console.warn('⚠️ WARNING: NIM_API_KEY is missing!');
+    }
 });
