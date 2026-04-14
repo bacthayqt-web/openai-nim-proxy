@@ -1,503 +1,399 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-var app = express();
-var PORT = process.env.PORT || 3000;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
-var NIM_API_KEY = process.env.NIM_API_KEY;
-var SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
-var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
-var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
-var MAX_TEMPERATURE = 2.0;
-var MAX_MAX_TOKENS = 128000;
+// --- Configuration ---
+const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
+const NIM_API_KEY = process.env.NIM_API_KEY;
+const SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
+const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
+const MAX_TEMPERATURE = 2.0;
+const MAX_MAX_TOKENS = 128000;
 
-var PRESETS_DIR = path.join(__dirname, 'presets');
-
-function loadPreset(presetName) {
-var filePath = path.join(PRESETS_DIR, presetName + '.json');
-try {
-var raw = fs.readFileSync(filePath, 'utf8');
-return JSON.parse(raw);
-} catch (err) {
-console.warn('Could not load preset "' + presetName + '": ' + err.message);
-return null;
-}
-}
-
-var PRESET_FRANKENSTEIN = loadPreset('frankenstein');
-var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
-
-var MODEL_MAPPING = {
-'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
-'gpt-4': 'z-ai/glm5',
-'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1',
-'gpt-4o': 'deepseek-ai/deepseek-v3.2',
-'gpt-4-0613': 'minimaxai/minimax-m2.7',
-'claude-3-opus': 'moonshotai/kimi-k2-thinking',
-'claude-3-sonnet': 'z-ai/glm4.7',
-'gemini-pro': 'deepseek-ai/deepseek-v3.1-terminus'
+const MODEL_MAPPING = {
+    'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
+    'gpt-4': 'z-ai/glm5',
+    'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1',
+    'gpt-4o': 'deepseek-ai/deepseek-v3.2',
+    'gpt-4-0613': 'minimaxai/minimax-m2.7',
+    'claude-3-opus': 'moonshotai/kimi-k2-thinking',
+    'claude-3-sonnet': 'z-ai/glm4.7',
+    'gemini-pro': 'deepseek-ai/deepseek-v3.1-terminus'
 };
 
-function isKimiModel(nimModelId) {
-if (!nimModelId) return false;
-var lower = nimModelId.toLowerCase();
-return lower.indexOf('moonshotai') !== -1 || lower.indexOf('kimi') !== -1;
-}
-
-function getPresetForModel(nimModelId) {
-if (isKimiModel(nimModelId)) {
-return PRESET_FRANKIMSTEIN;
-}
-return PRESET_FRANKENSTEIN;
-}
-
-function buildOrderedMessagesFromPreset(preset, originalMessages) {
-if (!preset || !preset.prompts || preset.prompts.length === 0) {
-return originalMessages;
-}
-
-var presetMessages = preset.prompts
-    .filter(function(p) { return p.content && p.content.trim() !== ''; })
-    .map(function(p) {
-        return {
-            role: p.role || 'system',
-            content: p.content.trim()
-        };
-    });
-
-var existingSystemMsgs = originalMessages.filter(function(m) { return m.role === 'system'; });
-var nonSystemMsgs = originalMessages.filter(function(m) { return m.role !== 'system'; });
-
-var systemPresets = presetMessages.filter(function(m) { return m.role === 'system'; });
-var nonSystemPresets = presetMessages.filter(function(m) { return m.role !== 'system'; });
-
-var result = existingSystemMsgs.concat(systemPresets).concat(nonSystemPresets).concat(nonSystemMsgs);
-return result;
-
-}
-
+// --- Middleware ---
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ limit: '5mb', extended: true }));
 
-app.get('/v1/presets', function(req, res) {
-var presets = [];
-if (PRESET_FRANKENSTEIN) {
-presets.push({
-id: 'frankenstein',
-name: PRESET_FRANKENSTEIN.name,
-description: PRESET_FRANKENSTEIN.description,
-model_type: 'non-kimi'
-});
-}
-if (PRESET_FRANKIMSTEIN) {
-presets.push({
-id: 'frankimstein',
-name: PRESET_FRANKIMSTEIN.name,
-description: PRESET_FRANKIMSTEIN.description,
-model_type: 'kimi'
-});
-}
-res.json({ presets: presets });
-});
+// --- Helpers ---
+const toBoolean = (val) => val === true || val === 'true';
 
-function toBoolean(val) {
-return val === true || val === 'true';
-}
-
-function getEnhancedMessages(model, messages) {
-var formattingNudge = {
-role: 'system',
-content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\n\n) between paragraphs. No walls of text.'
-};
-
-var hasFormattingInstruction = messages.some(
-    function(msg) {
-        return msg.role === 'system' &&
-            (msg.content.indexOf('Markdown') !== -1 ||
-             msg.content.indexOf('paragraph') !== -1 ||
-             msg.content.indexOf('formatting') !== -1 ||
-             msg.content.indexOf('CRITICAL INSTRUCTION') !== -1);
-    }
-);
-
-var enhanced;
-if (hasFormattingInstruction) {
-    enhanced = messages.map(function(msg) {
-        if (msg.role === 'system' &&
-            (msg.content.indexOf('Markdown') !== -1 ||
-             msg.content.indexOf('paragraph') !== -1 ||
-             msg.content.indexOf('formatting') !== -1)) {
-            return Object.assign({}, msg, {
-                content: formattingNudge.content + '\n\n' + msg.content
-            });
-        }
-        return msg;
-    });
-} else {
-    enhanced = [formattingNudge].concat(messages);
-}
-
-if (model.indexOf('glm') !== -1) {
-    var lastIndex = enhanced.length - 1;
-    if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
-        enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-            content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]'
-        });
-    }
-}
-
-return enhanced;
-
-}
-
-function validateAndSanitizeParams(temperature, max_tokens) {
-var sanitizedTemp = temperature;
-if (temperature !== undefined && temperature !== null) {
-sanitizedTemp = Math.max(0, Math.min(MAX_TEMPERATURE, parseFloat(temperature)));
-if (isNaN(sanitizedTemp)) {
-sanitizedTemp = 0.7;
-}
-}
-
-var sanitizedMaxTokens = max_tokens;
-if (max_tokens !== undefined && max_tokens !== null) {
-    sanitizedMaxTokens = Math.min(MAX_MAX_TOKENS, Math.max(1, parseInt(max_tokens, 10)));
-    if (isNaN(sanitizedMaxTokens)) {
-        sanitizedMaxTokens = 4096;
-    }
-}
-
-var finalTemp = (sanitizedTemp !== undefined && sanitizedTemp !== null) ? sanitizedTemp : 0.7;
-var finalTokens = (sanitizedMaxTokens !== undefined && sanitizedMaxTokens !== null) ? sanitizedMaxTokens : 4096;
-
-return { temperature: finalTemp, max_tokens: finalTokens };
-
-}
-
-app.get('/health', function(req, res) {
-res.json({
-status: 'ok',
-reasoning_display: SHOW_REASONING,
-thinking_mode: ENABLE_THINKING_MODE,
-timeout_seconds: REQUEST_TIMEOUT / 1000,
-presets: {
-frankenstein: !!PRESET_FRANKENSTEIN,
-frankimstein: !!PRESET_FRANKIMSTEIN
-}
-});
-});
-
-app.get('/v1/models', function(req, res) {
-var models = Object.keys(MODEL_MAPPING).map(function(id) {
-var nimModel = MODEL_MAPPING[id];
-var preset = getPresetForModel(nimModel);
-var presetLabel = 'none';
-if (preset) {
-presetLabel = preset.name.toLowerCase().indexOf('kim') !== -1 ? 'frankimstein' : 'frankenstein';
-}
-return {
-id: id,
-object: 'model',
-created: Math.floor(Date.now() / 1000),
-owned_by: 'nvidia-nim-proxy',
-nim_model: nimModel,
-preset: presetLabel
-};
-});
-res.json({ object: 'list', data: models });
-});
-
-app.post('/v1/chat/completions', async function(req, res) {
-try {
-if (!NIM_API_KEY) {
-return res.status(500).json({
-error: { message: 'NIM_API_KEY missing', code: 500 }
-});
-}
-
-    var model = req.body.model;
-    var messages = req.body.messages;
-    var temperature = req.body.temperature;
-    var max_tokens = req.body.max_tokens;
-    var stream = req.body.stream;
-    var preset_override = req.body.preset_override;
-
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-        return res.status(400).json({
-            error: { message: 'Missing or invalid messages array', code: 400 }
-        });
-    }
-
-    var sanitized = validateAndSanitizeParams(temperature, max_tokens);
-    var sanitizedTemp = sanitized.temperature;
-    var sanitizedMaxTokens = sanitized.max_tokens;
-
-    var wantsStream = toBoolean(stream);
-    var nimModel = MODEL_MAPPING[model] || model;
-
-    var preset;
-    if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
-        preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
-        console.log('Preset override: ' + preset_override + ' (forced by client)');
-    } else {
-        preset = getPresetForModel(nimModel);
-    }
-
-    var processedMessages = messages;
-
-    if (preset) {
-        processedMessages = buildOrderedMessagesFromPreset(preset, messages);
-        console.log('Preset applied: ' + preset.name + ' for model ' + nimModel);
-        console.log('   - Preset prompts injected: ' + preset.prompts.length);
-    } else {
-        console.log('No preset available for model ' + nimModel + ', using raw messages');
-    }
-
-    var enhancedMessages = getEnhancedMessages(nimModel, processedMessages);
-    var supportsThinking = nimModel.indexOf('deepseek') !== -1 || nimModel.indexOf('thinking') !== -1;
-
-    var nimRequest = {
-        model: nimModel,
-        messages: enhancedMessages,
-        temperature: sanitizedTemp,
-        max_tokens: sanitizedMaxTokens,
-        stream: wantsStream
+const getEnhancedMessages = (model, messages) => {
+    const formattingNudge = {
+        role: 'system',
+        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.'
     };
 
-    if (ENABLE_THINKING_MODE && supportsThinking) {
-        nimRequest.extra_body = {
-            chat_template_kwargs: { thinking: true }
-        };
-    }
-
-    var response = await axios.post(
-        NIM_API_BASE + '/chat/completions',
-        nimRequest,
-        {
-            headers: {
-                Authorization: 'Bearer ' + NIM_API_KEY,
-                'Content-Type': 'application/json'
-            },
-            responseType: wantsStream ? 'stream' : 'json',
-            timeout: REQUEST_TIMEOUT,
-            validateStatus: function() { return true; }
-        }
+    // Check if a similar formatting system message already exists to avoid duplicates
+    const hasFormattingInstruction = messages.some(
+        msg => msg.role === 'system' &&
+            (msg.content.includes('Markdown') ||
+             msg.content.includes('paragraph') ||
+             msg.content.includes('formatting') ||
+             msg.content.includes('CRITICAL INSTRUCTION'))
     );
 
-    if (response.status >= 400) {
-        if (res.headersSent) return;
+    let enhanced;
+    if (hasFormattingInstruction) {
+        // Merge existing system messages to avoid duplication
+        enhanced = messages.map(msg => {
+            if (msg.role === 'system' &&
+                (msg.content.includes('Markdown') ||
+                 msg.content.includes('paragraph') ||
+                 msg.content.includes('formatting'))) {
+                return {
+                    ...msg,
+                    content: `${formattingNudge.content}\n\n${msg.content}`
+                };
+            }
+            return msg;
+        });
+    } else {
+        enhanced = [formattingNudge, ...messages];
+    }
 
-        var errorMessage = 'Upstream error';
-        if (response.data && response.data.error) {
-            errorMessage = response.data.error.message || response.data.error.code || errorMessage;
+    // Add formatting hint for GLM models
+    if (model.includes('glm')) {
+        const lastIndex = enhanced.length - 1;
+        if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
+            enhanced[lastIndex] = {
+                ...enhanced[lastIndex],
+                content: `${enhanced[lastIndex].content}\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]`
+            };
+        }
+    }
+
+    return enhanced;
+};
+
+const validateAndSanitizeParams = (temperature, max_tokens) => {
+    let sanitizedTemp = temperature;
+    if (temperature !== undefined && temperature !== null) {
+        sanitizedTemp = Math.max(0, Math.min(MAX_TEMPERATURE, parseFloat(temperature)));
+        if (isNaN(sanitizedTemp)) {
+            sanitizedTemp = 0.7; // default
+        }
+    }
+
+    let sanitizedMaxTokens = max_tokens;
+    if (max_tokens !== undefined && max_tokens !== null) {
+        sanitizedMaxTokens = Math.min(MAX_MAX_TOKENS, Math.max(1, parseInt(max_tokens, 10)));
+        if (isNaN(sanitizedMaxTokens)) {
+            sanitizedMaxTokens = 4096; // default
+        }
+    }
+
+    return { temperature: sanitizedTemp ?? 0.7, max_tokens: sanitizedMaxTokens ?? 4096 };
+};
+
+// --- Routes ---
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        reasoning_display: SHOW_REASONING,
+        thinking_mode: ENABLE_THINKING_MODE,
+        timeout_seconds: REQUEST_TIMEOUT / 1000
+    });
+});
+
+app.get('/v1/models', (req, res) => {
+    const models = Object.keys(MODEL_MAPPING).map(id => ({
+        id,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: 'nvidia-nim-proxy'
+    }));
+    res.json({ object: 'list', data: models });
+});
+
+app.post('/v1/chat/completions', async (req, res) => {
+    try {
+        if (!NIM_API_KEY) {
+            return res.status(500).json({
+                error: {
+                    message: 'NIM_API_KEY missing',
+                    code: 500
+                }
+            });
         }
 
-        return res.status(response.status).json({
-            error: { message: errorMessage, code: response.status }
+        const { model, messages, temperature, max_tokens, stream } = req.body;
+
+        // Validate messages
+        if (!messages || !Array.isArray(messages) || messages.length === 0) {
+            return res.status(400).json({
+                error: {
+                    message: 'Missing or invalid messages array',
+                    code: 400
+                }
+            });
+        }
+
+        // Validate and sanitize numeric parameters
+        const { temperature: sanitizedTemp, max_tokens: sanitizedMaxTokens } =
+            validateAndSanitizeParams(temperature, max_tokens);
+
+        const wantsStream = toBoolean(stream);
+        const nimModel = MODEL_MAPPING[model] || model;
+        const enhancedMessages = getEnhancedMessages(nimModel, messages);
+        const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
+
+        const nimRequest = {
+            model: nimModel,
+            messages: enhancedMessages,
+            temperature: sanitizedTemp,
+            max_tokens: sanitizedMaxTokens,
+            stream: wantsStream,
+            ...(ENABLE_THINKING_MODE && supportsThinking ? {
+                extra_body: {
+                    chat_template_kwargs: { thinking: true }
+                }
+            } : {})
+        };
+
+        const response = await axios.post(
+            `${NIM_API_BASE}/chat/completions`,
+            nimRequest,
+            {
+                headers: {
+                    Authorization: `Bearer ${NIM_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                responseType: wantsStream ? 'stream' : 'json',
+                timeout: REQUEST_TIMEOUT,
+                validateStatus: () => true
+            }
+        );
+
+        if (response.status >= 400) {
+            // Avoid double-sending if already headers sent
+            if (res.headersSent) return;
+
+            const errorMessage = response.data?.error?.message ||
+                response.data?.error?.code ||
+                'Upstream error';
+
+            return res.status(response.status).json({
+                error: {
+                    message: errorMessage,
+                    code: response.status
+                }
+            });
+        }
+
+        if (wantsStream) {
+            handleStream(response.data, res);
+        } else {
+            handleNonStream(response.data, model, res);
+        }
+    } catch (error) {
+        console.error('Proxy error:', {
+            message: error.message,
+            code: error.code,
+            status: error.response?.status,
+            data: error.response?.data
         });
-    }
 
-    if (wantsStream) {
-        handleStream(response.data, res);
-    } else {
-        handleNonStream(response.data, model, res);
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: {
+                    message: error.message || 'Internal server error',
+                    code: 500
+                }
+            });
+        }
     }
-} catch (error) {
-    console.error('Proxy error:', {
-        message: error.message,
-        code: error.code,
-        status: error.response ? error.response.status : undefined
-    });
-
-    if (!res.headersSent) {
-        res.status(500).json({
-            error: { message: error.message || 'Internal server error', code: 500 }
-        });
-    }
-}
-
 });
 
 function handleStream(inputStream, res) {
-res.setHeader('Content-Type', 'text/event-stream');
-res.setHeader('Cache-Control', 'no-cache');
-res.setHeader('Connection', 'keep-alive');
-res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering if present
 
-var buffer = '';
-var partialData = '';
-var reasoningActive = false;
+    let buffer = '';
+    let partialData = '';
+    let reasoningActive = false;
 
-function safeWrite(obj) {
-    try {
-        var data = typeof obj === 'string' ? obj : JSON.stringify(obj);
-        res.write('data: ' + data + '\n\n');
-    } catch (e) {
-        console.error('Stream write error:', e.message);
-    }
-}
-
-function processData(rawData) {
-    if (!rawData || rawData.trim() === '') return;
-
-    if (rawData.trim() === '[DONE]') {
-        safeWrite('[DONE]');
-        return;
-    }
-
-    try {
-        var parsed = JSON.parse(rawData);
-        var delta = null;
-        if (parsed && parsed.choices && parsed.choices[0]) {
-            delta = parsed.choices[0].delta;
-        }
-
-        if (delta && SHOW_REASONING) {
-            var reasoning = delta.reasoning_content;
-            var content = delta.content;
-
-            if (reasoning) {
-                delta.content = reasoningActive ? reasoning : '\n\n' + content;
-                reasoningActive = false;
-            }
-        }
-
-        safeWrite(parsed);
-    } catch (e) {
-        partialData += rawData;
+    const safeWrite = (obj) => {
         try {
-            var parsed2 = JSON.parse(partialData);
-            partialData = '';
+            const data = typeof obj === 'string' ? obj : JSON.stringify(obj);
+            res.write(`data: ${data}\n\n`);
+        } catch (e) {
+            console.error('Stream write error:', e.message);
+        }
+    };
 
-            var delta2 = null;
-            if (parsed2 && parsed2.choices && parsed2.choices[0]) {
-                delta2 = parsed2.choices[0].delta;
-            }
-            if (delta2 && SHOW_REASONING) {
-                var reasoning2 = delta2.reasoning_content;
-                var content2 = delta2.content;
+    const processData = (rawData) => {
+        if (!rawData || rawData.trim() === '') return;
 
-                if (reasoning2) {
-                    delta2.content = reasoningActive ? reasoning2 : '\n\n' + content2;
+        if (rawData.trim() === '[DONE]') {
+            safeWrite('[DONE]');
+            return;
+        }
+
+        try {
+            const parsed = JSON.parse(rawData);
+            const delta = parsed?.choices?.[0]?.delta;
+
+            if (delta && SHOW_REASONING) {
+                const reasoning = delta.reasoning_content;
+                const content = delta.content;
+
+                if (reasoning) {
+                    delta.content = reasoningActive ? reasoning : `<think>\n${reasoning}`;
+                    reasoningActive = true;
+                    delete delta.reasoning_content;
+                } else if (content && reasoningActive) {
+                    delta.content = `\n</think>\n\n${content}`;
                     reasoningActive = false;
                 }
             }
 
-            safeWrite(parsed2);
-        } catch (e2) {
-            if (partialData.length > 100000) {
-                console.error('Partial data buffer exceeded, resetting');
+            safeWrite(parsed);
+        } catch (e) {
+            // Accumulate partial data and try to parse when we have more
+            partialData += rawData;
+            try {
+                const parsed = JSON.parse(partialData);
                 partialData = '';
+
+                const delta = parsed?.choices?.[0]?.delta;
+                if (delta && SHOW_REASONING) {
+                    const reasoning = delta.reasoning_content;
+                    const content = delta.content;
+
+                    if (reasoning) {
+                        delta.content = reasoningActive ? reasoning : `<think>\n${reasoning}`;
+                        reasoningActive = true;
+                        delete delta.reasoning_content;
+                    } else if (content && reasoningActive) {
+                        delta.content = `\n</think>\n\n${content}`;
+                        reasoningActive = false;
+                    }
+                }
+
+                safeWrite(parsed);
+            } catch {
+                // Still incomplete, wait for more data
+                // If partialData gets too large, something is wrong - reset
+                if (partialData.length > 100000) {
+                    console.error('Partial data buffer exceeded, resetting');
+                    partialData = '';
+                }
             }
-        }
-    }
-}
-
-inputStream.on('data', function(chunk) {
-    buffer += chunk.toString('utf8');
-    var lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-
-    for (var i = 0; i < lines.length; i++) {
-        if (lines[i].indexOf('data: ') !== 0) continue;
-        var dataStr = lines[i].slice(6);
-        processData(dataStr);
-    }
-});
-
-inputStream.on('end', function() {
-    if (buffer.indexOf('data: ') === 0) {
-        processData(buffer.slice(6));
-    }
-
-    if (reasoningActive) {
-        safeWrite({
-            choices: [{ delta: { content: '\n' } }]
-        });
-    }
-
-    safeWrite('[DONE]');
-    res.end();
-});
-
-inputStream.on('error', function(err) {
-    console.error('Stream error:', err.message);
-    if (!res.headersSent) {
-        res.status(500).json({
-            error: { message: 'Stream processing error', code: 500 }
-        });
-    }
-    res.end();
-});
-
-}
-
-function handleNonStream(data, model, res) {
-try {
-var openaiResponse = {
-id: 'chatcmpl-' + Date.now(),
-object: 'chat.completion',
-created: Math.floor(Date.now() / 1000),
-model: model,
-choices: (data.choices || []).map(function(choice, index) {
-var fullContent = (choice && choice.message && choice.message.content) || '';
-
-            if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
-                fullContent = '\n\n' + fullContent;
-            }
-
-            return {
-                index: choice.index !== undefined ? choice.index : index,
-                message: {
-                    role: (choice && choice.message && choice.message.role) || 'assistant',
-                    content: fullContent
-                },
-                finish_reason: choice.finish_reason || 'stop'
-            };
-        }),
-        usage: data.usage || {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0
         }
     };
 
-    res.json(openaiResponse);
-} catch (err) {
-    console.error('Response formatting error:', err.message);
-    res.status(500).json({
-        error: { message: 'Response formatting error', code: 500 }
+    inputStream.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const dataStr = line.slice(6);
+            processData(dataStr);
+        }
+    });
+
+    inputStream.on('end', () => {
+        // Process any remaining data in buffer
+        if (buffer.startsWith('data: ')) {
+            processData(buffer.slice(6));
+        }
+
+        // Close reasoning block if still open
+        if (reasoningActive) {
+            safeWrite({
+                choices: [{
+                    delta: { content: '\n</think>' }
+                }]
+            });
+        }
+
+        safeWrite('[DONE]');
+        res.end();
+    });
+
+    inputStream.on('error', (err) => {
+        console.error('Stream error:', err.message);
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: {
+                    message: 'Stream processing error',
+                    code: 500
+                }
+            });
+        }
+        res.end();
     });
 }
 
+function handleNonStream(data, model, res) {
+    try {
+        const openaiResponse = {
+            id: `chatcmpl-${Date.now()}`,
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: (data.choices || []).map((choice, index) => {
+                let fullContent = choice?.message?.content || '';
+
+                if (SHOW_REASONING && choice?.message?.reasoning_content) {
+                    fullContent = `<think>\n${choice.message.reasoning_content}\n</think>\n\n${fullContent}`;
+                }
+
+                return {
+                    index: choice.index ?? index,
+                    message: {
+                        role: choice?.message?.role || 'assistant',
+                        content: fullContent
+                    },
+                    finish_reason: choice.finish_reason || 'stop'
+                };
+            }),
+            usage: data.usage || {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0
+            }
+        };
+
+        res.json(openaiResponse);
+    } catch (err) {
+        console.error('Response formatting error:', err.message);
+        res.status(500).json({
+            error: {
+                message: 'Response formatting error',
+                code: 500
+            }
+        });
+    }
 }
 
-app.listen(PORT, '0.0.0.0', function() {
-console.log('Proxy running on port ' + PORT);
-console.log(' - SHOW_REASONING: ' + SHOW_REASONING);
-console.log(' - ENABLE_THINKING_MODE: ' + ENABLE_THINKING_MODE);
-console.log(' - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
-console.log(' - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
-console.log(' - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
+// --- Start Server ---
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Proxy running on port ${PORT}`);
+    console.log(`   - SHOW_REASONING: ${SHOW_REASONING}`);
+    console.log(`   - ENABLE_THINKING_MODE: ${ENABLE_THINKING_MODE}`);
+    console.log(`   - REQUEST_TIMEOUT: ${REQUEST_TIMEOUT / 1000}s`);
 
-if (!NIM_API_KEY) {
-    console.warn('WARNING: NIM_API_KEY is missing!');
-}
-
-console.log('');
-console.log('Model -> Preset Mapping:');
-var modelKeys = Object.keys(MODEL_MAPPING);
-for (var i = 0; i < modelKeys.length; i++) {
-    var openaiId = modelKeys[i];
-    var nimId = MODEL_MAPPING[openaiId];
-    var preset = getPresetForModel(nimId);
-    var presetName = preset ? preset.name : 'NONE';
-    var isKimi = isKimiModel(nimId) ? 'Kimi' : 'Non-Kimi';
-    console.log('   - ' + openaiId + ' -> ' + nimId + ' (' + isKimi + ') -> ' + presetName);
-}
-
+    if (!NIM_API_KEY) {
+        console.warn('⚠️ WARNING: NIM_API_KEY is missing!');
+    }
 });
