@@ -3,23 +3,23 @@ const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const app = express();
-const PORT = process.env.PORT || 3000;
+var app = express();
+var PORT = process.env.PORT || 3000;
 
-const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
-const NIM_API_KEY = process.env.NIM_API_KEY;
-const SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
-const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
-const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
-const MAX_TEMPERATURE = 2.0;
-const MAX_MAX_TOKENS = 128000;
+var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
+var NIM_API_KEY = process.env.NIM_API_KEY;
+var SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
+var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
+var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
+var MAX_TEMPERATURE = 2.0;
+var MAX_MAX_TOKENS = 128000;
 
-const PRESETS_DIR = path.join(__dirname, 'presets');
+var PRESETS_DIR = path.join(__dirname, 'presets');
 
 function loadPreset(presetName) {
-const filePath = path.join(PRESETS_DIR, ${presetName}.json);
+var filePath = path.join(PRESETS_DIR, presetName + '.json');
 try {
-const raw = fs.readFileSync(filePath, 'utf8');
+var raw = fs.readFileSync(filePath, 'utf8');
 return JSON.parse(raw);
 } catch (err) {
 console.warn('Could not load preset "' + presetName + '": ' + err.message);
@@ -27,10 +27,10 @@ return null;
 }
 }
 
-const PRESET_FRANKENSTEIN = loadPreset('frankenstein');
-const PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
+var PRESET_FRANKENSTEIN = loadPreset('frankenstein');
+var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
 
-const MODEL_MAPPING = {
+var MODEL_MAPPING = {
 'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
 'gpt-4': 'z-ai/glm5',
 'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1',
@@ -43,8 +43,8 @@ const MODEL_MAPPING = {
 
 function isKimiModel(nimModelId) {
 if (!nimModelId) return false;
-const lower = nimModelId.toLowerCase();
-return lower.includes('moonshotai') || lower.includes('kimi');
+var lower = nimModelId.toLowerCase();
+return lower.indexOf('moonshotai') !== -1 || lower.indexOf('kimi') !== -1;
 }
 
 function getPresetForModel(nimModelId) {
@@ -59,7 +59,7 @@ if (!preset || !preset.prompts || preset.prompts.length === 0) {
 return originalMessages;
 }
 
-const presetMessages = preset.prompts
+var presetMessages = preset.prompts
     .filter(function(p) { return p.content && p.content.trim() !== ''; })
     .map(function(p) {
         return {
@@ -68,15 +68,14 @@ const presetMessages = preset.prompts
         };
     });
 
-const existingSystemMsgs = originalMessages.filter(function(m) { return m.role === 'system'; });
-const nonSystemMsgs = originalMessages.filter(function(m) { return m.role !== 'system'; });
+var existingSystemMsgs = originalMessages.filter(function(m) { return m.role === 'system'; });
+var nonSystemMsgs = originalMessages.filter(function(m) { return m.role !== 'system'; });
 
-return [
-    ...existingSystemMsgs,
-    ...presetMessages.filter(function(m) { return m.role === 'system'; }),
-    ...presetMessages.filter(function(m) { return m.role !== 'system'; }),
-    ...nonSystemMsgs
-];
+var systemPresets = presetMessages.filter(function(m) { return m.role === 'system'; });
+var nonSystemPresets = presetMessages.filter(function(m) { return m.role !== 'system'; });
+
+var result = existingSystemMsgs.concat(systemPresets).concat(nonSystemPresets).concat(nonSystemMsgs);
+return result;
 
 }
 
@@ -85,7 +84,7 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ limit: '5mb', extended: true }));
 
 app.get('/v1/presets', function(req, res) {
-const presets = [];
+var presets = [];
 if (PRESET_FRANKENSTEIN) {
 presets.push({
 id: 'frankenstein',
@@ -105,31 +104,33 @@ model_type: 'kimi'
 res.json({ presets: presets });
 });
 
-const toBoolean = function(val) { return val === true || val === 'true'; };
+function toBoolean(val) {
+return val === true || val === 'true';
+}
 
-const getEnhancedMessages = function(model, messages) {
-const formattingNudge = {
+function getEnhancedMessages(model, messages) {
+var formattingNudge = {
 role: 'system',
 content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\n\n) between paragraphs. No walls of text.'
 };
 
-const hasFormattingInstruction = messages.some(
+var hasFormattingInstruction = messages.some(
     function(msg) {
         return msg.role === 'system' &&
-            (msg.content.includes('Markdown') ||
-             msg.content.includes('paragraph') ||
-             msg.content.includes('formatting') ||
-             msg.content.includes('CRITICAL INSTRUCTION'));
+            (msg.content.indexOf('Markdown') !== -1 ||
+             msg.content.indexOf('paragraph') !== -1 ||
+             msg.content.indexOf('formatting') !== -1 ||
+             msg.content.indexOf('CRITICAL INSTRUCTION') !== -1);
     }
 );
 
-let enhanced;
+var enhanced;
 if (hasFormattingInstruction) {
     enhanced = messages.map(function(msg) {
         if (msg.role === 'system' &&
-            (msg.content.includes('Markdown') ||
-             msg.content.includes('paragraph') ||
-             msg.content.includes('formatting'))) {
+            (msg.content.indexOf('Markdown') !== -1 ||
+             msg.content.indexOf('paragraph') !== -1 ||
+             msg.content.indexOf('formatting') !== -1)) {
             return Object.assign({}, msg, {
                 content: formattingNudge.content + '\n\n' + msg.content
             });
@@ -140,8 +141,8 @@ if (hasFormattingInstruction) {
     enhanced = [formattingNudge].concat(messages);
 }
 
-if (model.includes('glm')) {
-    const lastIndex = enhanced.length - 1;
+if (model.indexOf('glm') !== -1) {
+    var lastIndex = enhanced.length - 1;
     if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
         enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
             content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]'
@@ -151,10 +152,10 @@ if (model.includes('glm')) {
 
 return enhanced;
 
-};
+}
 
-const validateAndSanitizeParams = function(temperature, max_tokens) {
-let sanitizedTemp = temperature;
+function validateAndSanitizeParams(temperature, max_tokens) {
+var sanitizedTemp = temperature;
 if (temperature !== undefined && temperature !== null) {
 sanitizedTemp = Math.max(0, Math.min(MAX_TEMPERATURE, parseFloat(temperature)));
 if (isNaN(sanitizedTemp)) {
@@ -162,7 +163,7 @@ sanitizedTemp = 0.7;
 }
 }
 
-let sanitizedMaxTokens = max_tokens;
+var sanitizedMaxTokens = max_tokens;
 if (max_tokens !== undefined && max_tokens !== null) {
     sanitizedMaxTokens = Math.min(MAX_MAX_TOKENS, Math.max(1, parseInt(max_tokens, 10)));
     if (isNaN(sanitizedMaxTokens)) {
@@ -170,12 +171,12 @@ if (max_tokens !== undefined && max_tokens !== null) {
     }
 }
 
-return {
-    temperature: sanitizedTemp !== undefined && sanitizedTemp !== null ? sanitizedTemp : 0.7,
-    max_tokens: sanitizedMaxTokens !== undefined && sanitizedMaxTokens !== null ? sanitizedMaxTokens : 4096
-};
+var finalTemp = (sanitizedTemp !== undefined && sanitizedTemp !== null) ? sanitizedTemp : 0.7;
+var finalTokens = (sanitizedMaxTokens !== undefined && sanitizedMaxTokens !== null) ? sanitizedMaxTokens : 4096;
 
-};
+return { temperature: finalTemp, max_tokens: finalTokens };
+
+}
 
 app.get('/health', function(req, res) {
 res.json({
@@ -191,16 +192,20 @@ frankimstein: !!PRESET_FRANKIMSTEIN
 });
 
 app.get('/v1/models', function(req, res) {
-const models = Object.keys(MODEL_MAPPING).map(function(id) {
-const nimModel = MODEL_MAPPING[id];
-const preset = getPresetForModel(nimModel);
+var models = Object.keys(MODEL_MAPPING).map(function(id) {
+var nimModel = MODEL_MAPPING[id];
+var preset = getPresetForModel(nimModel);
+var presetLabel = 'none';
+if (preset) {
+presetLabel = preset.name.toLowerCase().indexOf('kim') !== -1 ? 'frankimstein' : 'frankenstein';
+}
 return {
 id: id,
 object: 'model',
 created: Math.floor(Date.now() / 1000),
 owned_by: 'nvidia-nim-proxy',
 nim_model: nimModel,
-preset: preset ? (preset.name.toLowerCase().includes('kim') ? 'frankimstein' : 'frankenstein') : 'none'
+preset: presetLabel
 };
 });
 res.json({ object: 'list', data: models });
@@ -214,12 +219,12 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
 });
 }
 
-    const model = req.body.model;
-    const messages = req.body.messages;
-    const temperature = req.body.temperature;
-    const max_tokens = req.body.max_tokens;
-    const stream = req.body.stream;
-    const preset_override = req.body.preset_override;
+    var model = req.body.model;
+    var messages = req.body.messages;
+    var temperature = req.body.temperature;
+    var max_tokens = req.body.max_tokens;
+    var stream = req.body.stream;
+    var preset_override = req.body.preset_override;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({
@@ -227,14 +232,14 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
         });
     }
 
-    const sanitized = validateAndSanitizeParams(temperature, max_tokens);
-    const sanitizedTemp = sanitized.temperature;
-    const sanitizedMaxTokens = sanitized.max_tokens;
+    var sanitized = validateAndSanitizeParams(temperature, max_tokens);
+    var sanitizedTemp = sanitized.temperature;
+    var sanitizedMaxTokens = sanitized.max_tokens;
 
-    const wantsStream = toBoolean(stream);
-    const nimModel = MODEL_MAPPING[model] || model;
+    var wantsStream = toBoolean(stream);
+    var nimModel = MODEL_MAPPING[model] || model;
 
-    let preset;
+    var preset;
     if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
         preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
         console.log('Preset override: ' + preset_override + ' (forced by client)');
@@ -242,7 +247,7 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
         preset = getPresetForModel(nimModel);
     }
 
-    let processedMessages = messages;
+    var processedMessages = messages;
 
     if (preset) {
         processedMessages = buildOrderedMessagesFromPreset(preset, messages);
@@ -252,10 +257,10 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
         console.log('No preset available for model ' + nimModel + ', using raw messages');
     }
 
-    const enhancedMessages = getEnhancedMessages(nimModel, processedMessages);
-    const supportsThinking = nimModel.includes('deepseek') || nimModel.includes('thinking');
+    var enhancedMessages = getEnhancedMessages(nimModel, processedMessages);
+    var supportsThinking = nimModel.indexOf('deepseek') !== -1 || nimModel.indexOf('thinking') !== -1;
 
-    const nimRequest = {
+    var nimRequest = {
         model: nimModel,
         messages: enhancedMessages,
         temperature: sanitizedTemp,
@@ -269,7 +274,7 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
         };
     }
 
-    const response = await axios.post(
+    var response = await axios.post(
         NIM_API_BASE + '/chat/completions',
         nimRequest,
         {
@@ -286,9 +291,10 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
     if (response.status >= 400) {
         if (res.headersSent) return;
 
-        const errorMessage = (response.data && response.data.error && response.data.error.message) ||
-            (response.data && response.data.error && response.data.error.code) ||
-            'Upstream error';
+        var errorMessage = 'Upstream error';
+        if (response.data && response.data.error) {
+            errorMessage = response.data.error.message || response.data.error.code || errorMessage;
+        }
 
         return res.status(response.status).json({
             error: { message: errorMessage, code: response.status }
@@ -304,8 +310,7 @@ error: { message: 'NIM_API_KEY missing', code: 500 }
     console.error('Proxy error:', {
         message: error.message,
         code: error.code,
-        status: error.response ? error.response.status : undefined,
-        data: error.response ? error.response.data : undefined
+        status: error.response ? error.response.status : undefined
     });
 
     if (!res.headersSent) {
@@ -323,20 +328,20 @@ res.setHeader('Cache-Control', 'no-cache');
 res.setHeader('Connection', 'keep-alive');
 res.setHeader('X-Accel-Buffering', 'no');
 
-let buffer = '';
-let partialData = '';
-let reasoningActive = false;
+var buffer = '';
+var partialData = '';
+var reasoningActive = false;
 
-const safeWrite = function(obj) {
+function safeWrite(obj) {
     try {
-        const data = typeof obj === 'string' ? obj : JSON.stringify(obj);
+        var data = typeof obj === 'string' ? obj : JSON.stringify(obj);
         res.write('data: ' + data + '\n\n');
     } catch (e) {
         console.error('Stream write error:', e.message);
     }
-};
+}
 
-const processData = function(rawData) {
+function processData(rawData) {
     if (!rawData || rawData.trim() === '') return;
 
     if (rawData.trim() === '[DONE]') {
@@ -345,19 +350,18 @@ const processData = function(rawData) {
     }
 
     try {
-        const parsed = JSON.parse(rawData);
-        const delta = parsed && parsed.choices && parsed.choices[0] ? parsed.choices[0].delta : null;
+        var parsed = JSON.parse(rawData);
+        var delta = null;
+        if (parsed && parsed.choices && parsed.choices[0]) {
+            delta = parsed.choices[0].delta;
+        }
 
         if (delta && SHOW_REASONING) {
-            const reasoning = delta.reasoning_content;
-            const content = delta.content;
+            var reasoning = delta.reasoning_content;
+            var content = delta.content;
 
             if (reasoning) {
-                delta.content = reasoningActive ? reasoning : '\u003Cthink\u003E\n' + reasoning;
-                reasoningActive = true;
-                delete delta.reasoning_content;
-            } else if (content && reasoningActive) {
-                delta.content = '\n\u003C/think\u003E\n\n' + content;
+                delta.content = reasoningActive ? reasoning : '\n\n' + content;
                 reasoningActive = false;
             }
         }
@@ -366,25 +370,24 @@ const processData = function(rawData) {
     } catch (e) {
         partialData += rawData;
         try {
-            const parsed = JSON.parse(partialData);
+            var parsed2 = JSON.parse(partialData);
             partialData = '';
 
-            const delta = parsed && parsed.choices && parsed.choices[0] ? parsed.choices[0].delta : null;
-            if (delta && SHOW_REASONING) {
-                const reasoning = delta.reasoning_content;
-                const content = delta.content;
+            var delta2 = null;
+            if (parsed2 && parsed2.choices && parsed2.choices[0]) {
+                delta2 = parsed2.choices[0].delta;
+            }
+            if (delta2 && SHOW_REASONING) {
+                var reasoning2 = delta2.reasoning_content;
+                var content2 = delta2.content;
 
-                if (reasoning) {
-                    delta.content = reasoningActive ? reasoning : '\u003Cthink\u003E\n' + reasoning;
-                    reasoningActive = true;
-                    delete delta.reasoning_content;
-                } else if (content && reasoningActive) {
-                    delta.content = '\n\u003C/think\u003E\n\n' + content;
+                if (reasoning2) {
+                    delta2.content = reasoningActive ? reasoning2 : '\n\n' + content2;
                     reasoningActive = false;
                 }
             }
 
-            safeWrite(parsed);
+            safeWrite(parsed2);
         } catch (e2) {
             if (partialData.length > 100000) {
                 console.error('Partial data buffer exceeded, resetting');
@@ -392,28 +395,28 @@ const processData = function(rawData) {
             }
         }
     }
-};
+}
 
 inputStream.on('data', function(chunk) {
     buffer += chunk.toString('utf8');
-    const lines = buffer.split(/\r?\n/);
+    var lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || '';
 
-    for (let i = 0; i < lines.length; i++) {
-        if (!lines[i].startsWith('data: ')) continue;
-        const dataStr = lines[i].slice(6);
+    for (var i = 0; i < lines.length; i++) {
+        if (lines[i].indexOf('data: ') !== 0) continue;
+        var dataStr = lines[i].slice(6);
         processData(dataStr);
     }
 });
 
 inputStream.on('end', function() {
-    if (buffer.startsWith('data: ')) {
+    if (buffer.indexOf('data: ') === 0) {
         processData(buffer.slice(6));
     }
 
     if (reasoningActive) {
         safeWrite({
-            choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
+            choices: [{ delta: { content: '\n' } }]
         });
     }
 
@@ -435,16 +438,16 @@ inputStream.on('error', function(err) {
 
 function handleNonStream(data, model, res) {
 try {
-const openaiResponse = {
+var openaiResponse = {
 id: 'chatcmpl-' + Date.now(),
 object: 'chat.completion',
 created: Math.floor(Date.now() / 1000),
 model: model,
 choices: (data.choices || []).map(function(choice, index) {
-let fullContent = (choice && choice.message && choice.message.content) || '';
+var fullContent = (choice && choice.message && choice.message.content) || '';
 
             if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
-                fullContent = '\u003Cthink\u003E\n' + choice.message.reasoning_content + '\n\u003C/think\u003E\n\n' + fullContent;
+                fullContent = '\n\n' + fullContent;
             }
 
             return {
@@ -487,13 +490,13 @@ if (!NIM_API_KEY) {
 
 console.log('');
 console.log('Model -> Preset Mapping:');
-const modelKeys = Object.keys(MODEL_MAPPING);
-for (let i = 0; i < modelKeys.length; i++) {
-    const openaiId = modelKeys[i];
-    const nimId = MODEL_MAPPING[openaiId];
-    const preset = getPresetForModel(nimId);
-    const presetName = preset ? preset.name : 'NONE';
-    const isKimi = isKimiModel(nimId) ? 'Kimi' : 'Non-Kimi';
+var modelKeys = Object.keys(MODEL_MAPPING);
+for (var i = 0; i < modelKeys.length; i++) {
+    var openaiId = modelKeys[i];
+    var nimId = MODEL_MAPPING[openaiId];
+    var preset = getPresetForModel(nimId);
+    var presetName = preset ? preset.name : 'NONE';
+    var isKimi = isKimiModel(nimId) ? 'Kimi' : 'Non-Kimi';
     console.log('   - ' + openaiId + ' -> ' + nimId + ' (' + isKimi + ') -> ' + presetName);
 }
 
