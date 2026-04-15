@@ -109,49 +109,48 @@ function toBoolean(val) {
 }
 
 function getEnhancedMessages(model, messages) {
-var formattingNudge = {
-role: 'system',
-content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\n\n) between paragraphs. No walls of text. You MUST respond with plain text only. Do NOT wrap your response in JSON, arrays, or structured formats like [{"type": "text", "text": "..."}]. Just write your response directly as plain text.'
-};
+    var formattingNudge = {
+        role: 'system',
+        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text. You MUST respond with plain text only. Do NOT wrap your response in JSON, arrays, or structured formats like [{"type": "text", "text": "..."}]. Just write your response directly as plain text.\n\nSTRICT FORMATTING RULES:\n1. Speech: Must ALWAYS be enclosed in "double quotes".\n2. Actions & Narration: Must ALWAYS be enclosed in *single asterisks*.\n3. Emphasis: Must ALWAYS be enclosed in **double asterisks**.\n4. Thoughts: Must ALWAYS be enclosed in `backticks`.'
+    };
 
-var hasFormattingInstruction = messages.some(
-    function(msg) {
-        return msg.role === 'system' &&
-            (msg.content.indexOf('Markdown') !== -1 ||
-             msg.content.indexOf('paragraph') !== -1 ||
-             msg.content.indexOf('formatting') !== -1 ||
-             msg.content.indexOf('CRITICAL INSTRUCTION') !== -1);
+    var hasFormattingInstruction = messages.some(
+        function(msg) {
+            return msg.role === 'system' &&
+                (msg.content.indexOf('Markdown') !== -1 ||
+                 msg.content.indexOf('paragraph') !== -1 ||
+                 msg.content.indexOf('formatting') !== -1 ||
+                 msg.content.indexOf('CRITICAL INSTRUCTION') !== -1);
+        }
+    );
+
+    var enhanced;
+    if (hasFormattingInstruction) {
+        enhanced = messages.map(function(msg) {
+            if (msg.role === 'system' &&
+                (msg.content.indexOf('Markdown') !== -1 ||
+                 msg.content.indexOf('paragraph') !== -1 ||
+                 msg.content.indexOf('formatting') !== -1)) {
+                return Object.assign({}, msg, {
+                    content: formattingNudge.content + '\n\n' + msg.content
+                });
+            }
+            return msg;
+        });
+    } else {
+        enhanced = [formattingNudge].concat(messages);
     }
-);
 
-var enhanced;
-if (hasFormattingInstruction) {
-    enhanced = messages.map(function(msg) {
-        if (msg.role === 'system' &&
-            (msg.content.indexOf('Markdown') !== -1 ||
-             msg.content.indexOf('paragraph') !== -1 ||
-             msg.content.indexOf('formatting') !== -1)) {
-            return Object.assign({}, msg, {
-                content: formattingNudge.content + '\n\n' + msg.content
+    if (model.indexOf('glm') !== -1 || model.indexOf('deepseek') !== -1) {
+        var lastIndex = enhanced.length - 1;
+        if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
+            enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
+                content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use double line breaks. Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only.]'
             });
         }
-        return msg;
-    });
-} else {
-    enhanced = [formattingNudge].concat(messages);
-}
-
-if (model.indexOf('glm') !== -1 || model.indexOf('deepseek') !== -1) {
-    var lastIndex = enhanced.length - 1;
-    if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
-        enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-            content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks. Respond with plain text only, NOT JSON or structured formats.]'
-        });
     }
-}
 
-return enhanced;
-
+    return enhanced;
 }
 
 function cleanStructuredContent(text) {
