@@ -361,9 +361,22 @@ function processData(rawData) {
             var content = delta.content;
 
             if (reasoning) {
-                delta.content = reasoningActive ? reasoning : '\n\n' + content;
+                if (reasoningActive) {
+                    delta.content = reasoning;
+                } else {
+                    delta.content = '\n\n' + content;
                 reasoningActive = false;
+            } else if (reasoningActive && !content) {
+                delta.content = null;
             }
+        }
+
+        if (delta && delta.content === null) {
+            return;
+        }
+
+        if (delta && delta.content === '' ) {
+            return;
         }
 
         safeWrite(parsed);
@@ -382,9 +395,22 @@ function processData(rawData) {
                 var content2 = delta2.content;
 
                 if (reasoning2) {
-                    delta2.content = reasoningActive ? reasoning2 : '\n\n' + content2;
+                    if (reasoningActive) {
+                        delta2.content = reasoning2;
+                    } else {
+                        delta2.content= '\n\n' + content2;
                     reasoningActive = false;
+                } else if (reasoningActive && !content2) {
+                    delta2.content = null;
                 }
+            }
+
+            if (delta2 && delta2.content === null) {
+                return;
+            }
+
+            if (delta2 && delta2.content === '') {
+                return;
             }
 
             safeWrite(parsed2);
@@ -416,8 +442,9 @@ inputStream.on('end', function() {
 
     if (reasoningActive) {
         safeWrite({
-            choices: [{ delta: { content: '\n' } }]
+            choices: [{ delta: { content' } }]
         });
+        reasoningActive = false;
     }
 
     safeWrite('[DONE]');
