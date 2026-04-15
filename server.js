@@ -62,21 +62,60 @@ function buildOrderedMessagesFromPreset(preset, originalMessages) {
         return originalMessages;
     }
 
-    var presetMessages = preset.prompts
-        .filter(function(p) { return p.content && p.content.trim() !== ''; })
-        .map(function(p) {
-            return {
-                role: p.role || 'system',
-                content: p.content.trim()
-            };
-        });
-
+    // 1. Separate original frontend messages
     var existingSystemMsgs = originalMessages.filter(function(m) { return m.role === 'system'; });
-    var nonSystemMsgs = originalMessages.filter(function(m) { return m.role !== 'system'; });
-    var systemPresets = presetMessages.filter(function(m) { return m.role === 'system'; });
-    var nonSystemPresets = presetMessages.filter(function(m) { return m.role !== 'system'; });
+    var existingChatMsgs = originalMessages.filter(function(m) { return m.role !== 'system'; });
 
-    return existingSystemMsgs.concat(systemPresets).concat(nonSystemPresets).concat(nonSystemMsgs);
+    // 2. Separate preset messages
+    var systemPresets = [];
+    var userPresets = [];
+
+    preset.prompts.forEach(function(p) {
+        if (!p.content || p.content.trim() === '') return;
+        if (p.role === 'system') {
+            systemPresets.push({ role: 'system', content: p.content.trim() });
+        } else {
+            // Treat anything else (user/assistant) from the preset as a critical constraint
+            userPresets.push(p.content.trim());
+        }
+    });
+
+    // 3. Construct the base array: Frontend System -> Preset Systems
+    var finalMessages = existingSystemMsgs.concat(systemPresets);
+
+    // 4. Handle Chat Messages and Anchor User Presets
+    if (existingChatMsgs.length > 0) {
+        var previousChat = existingChatMsgs.slice(0, -1);
+        var lastMessage = existingChatMsgs[existingChatMsgs.length - 1];
+
+        // Add all historical chat back-and-forth
+        finalMessages = finalMessages.concat(previousChat);
+
+        // Anchor the user-role preset instructions to the VERY LAST message
+        if (userPresets.length > 0) {
+            var combinedUserPresets = "\n\n[SYSTEM INSTRUCTION OVERRIDE]\n" + userPresets.join("\n\n");
+            
+            if (lastMessage.role === 'user') {
+                finalMessages.push({
+                    role: 'user',
+                    content: lastMessage.content + combinedUserPresets
+                });
+            } else {
+                // Failsafe in case the frontend's last message wasn't 'user'
+                finalMessages.push(lastMessage);
+                finalMessages.push({ role: 'user', content: combinedUserPresets.trim() });
+            }
+        } else {
+            finalMessages.push(lastMessage);
+        }
+    } else {
+        // Fallback if no chat history exists yet
+        if (userPresets.length > 0) {
+            finalMessages.push({ role: 'user', content: userPresets.join("\n\n") });
+        }
+    }
+
+    return finalMessages;
 }
 
 app.use(cors());
