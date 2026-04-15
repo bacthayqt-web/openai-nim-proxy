@@ -109,48 +109,72 @@ function toBoolean(val) {
 }
 
 function getEnhancedMessages(model, messages) {
-    var formattingNudge = {
-        role: 'system',
-        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.'
-    };
+// Keywords that indicate a formatting instruction already exists
+var FORMAT_KEYWORDS = [
+'CRITICAL INSTRUCTION',
+'double line breaks',
+'paragraph structure',
+'use markdown',
+'formatting rule'
+];
 
-    var hasFormattingInstruction = messages.some(
-        function(msg) {
-            return msg.role === 'system' &&
-                (msg.content.indexOf('Markdown') !== -1 ||
-                 msg.content.indexOf('paragraph') !== -1 ||
-                 msg.content.indexOf('formatting') !== -1 ||
-                 msg.content.indexOf('CRITICAL INSTRUCTION') !== -1);
+// Check if any system message already contains a formatting instruction
+function hasFormattingKeyword(content) {
+    if (!content || typeof content !== 'string') return false;
+    var lower = content.toLowerCase();
+    for (var i = 0; i < FORMAT_KEYWORDS.length; i++) {
+        if (lower.indexOf(FORMAT_KEYWORDS[i].toLowerCase()) !== -1) {
+            return true;
         }
-    );
-
-    var enhanced;
-    if (hasFormattingInstruction) {
-        enhanced = messages.map(function(msg) {
-            if (msg.role === 'system' &&
-                (msg.content.indexOf('Markdown') !== -1 ||
-                 msg.content.indexOf('paragraph') !== -1 ||
-                 msg.content.indexOf('formatting') !== -1)) {
-                return Object.assign({}, msg, {
-                    content: formattingNudge.content + '\n\n' + msg.content
-                });
-            }
-            return msg;
-        });
-    } else {
-        enhanced = [formattingNudge].concat(messages);
     }
+    return false;
+}
 
-    if (model.indexOf('glm') !== -1) {
-        var lastIndex = enhanced.length - 1;
-        if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
-            enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-                content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]'
+var formattingNudge = {
+    role: 'system',
+    content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.'
+};
+
+var hasFormattingInstruction = messages.some(function(msg) {
+    return msg.role === 'system' && hasFormattingKeyword(msg.content);
+});
+
+var enhanced;
+if (hasFormattingInstruction) {
+    // Only prepend the nudge to the FIRST matching system message, skip the rest
+    var nudgeApplied = false;
+    enhanced = messages.map(function(msg) {
+        if (!nudgeApplied && msg.role === 'system' && hasFormattingKeyword(msg.content)) {
+            nudgeApplied = true;
+            return Object.assign({}, msg, {
+                content: formattingNudge.content + '\n\n' + msg.content
             });
         }
-    }
+        return msg;
+    });
+} else {
+    enhanced = [formattingNudge].concat(messages);
+}
 
-    return enhanced;
+// GLM models benefit from an extra formatting hint appended to the last user message
+if (model.indexOf('glm') !== -1) {
+    // Find the last user message (not just the last message)
+    var lastUserIndex = -1;
+    for (var i = enhanced.length - 1; i >= 0; i--) {
+        if (enhanced[i].role === 'user') {
+            lastUserIndex = i;
+            break;
+        }
+    }
+    if (lastUserIndex !== -1) {
+        enhanced[lastUserIndex] = Object.assign({}, enhanced[lastUserIndex], {
+            content: enhanced[lastUserIndex].content + '\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]'
+        });
+    }
+}
+
+return enhanced;
+
 }
 
 function validateAndSanitizeParams(temperature, max_tokens) {
