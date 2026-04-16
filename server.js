@@ -57,6 +57,7 @@ function getPresetForModel(nimModelId) {
     return PRESET_FRANKENSTEIN;
 }
 
+// FIX 1: Merge System Messages in Presets safely
 function buildOrderedMessagesFromPreset(preset, originalMessages) {
     if (!preset || !preset.prompts || preset.prompts.length === 0) {
         return originalMessages;
@@ -76,7 +77,15 @@ function buildOrderedMessagesFromPreset(preset, originalMessages) {
     var systemPresets = presetMessages.filter(function(m) { return m.role === 'system'; });
     var nonSystemPresets = presetMessages.filter(function(m) { return m.role !== 'system'; });
 
-    return existingSystemMsgs.concat(systemPresets).concat(nonSystemPresets).concat(nonSystemMsgs);
+    var allSystemMsgs = existingSystemMsgs.concat(systemPresets);
+    var mergedSystemContent = allSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
+
+    var finalMessages = [];
+    if (mergedSystemContent) {
+        finalMessages.push({ role: 'system', content: mergedSystemContent });
+    }
+
+    return finalMessages.concat(nonSystemPresets).concat(nonSystemMsgs);
 }
 
 app.use(cors());
@@ -154,69 +163,66 @@ function getEnhancedMessages(model, messages) {
 }
 
 function cleanStructuredContent(text) {
-if (!text || typeof text !== 'string') {
-return text;
-}
-
-var trimmed = text.trim();
-
-if (trimmed === 'null') {
-    return '';
-}
-
-var jsonParseAttempt = null;
-
-try {
-    jsonParseAttempt = JSON.parse(trimmed);
-} catch (e1) {
-
-    var fixed = trimmed.replace(/'/g, '"');
-    try {
-        jsonParseAttempt = JSON.parse(fixed);
-    } catch (e2) {
-
+    if (!text || typeof text !== 'string') {
+        return text;
     }
-}
 
-if (jsonParseAttempt === null) {
-    return text;
-}
+    var trimmed = text.trim();
 
-if (Array.isArray(jsonParseAttempt)) {
-    var resultParts = [];
-    for (var i = 0; i < jsonParseAttempt.length; i++) {
-        var item = jsonParseAttempt[i];
-        if (item && typeof item === 'object') {
-            if (item.type === 'text' && typeof item.text === 'string') {
-                resultParts.push(item.text);
-            } else if (typeof item.text === 'string') {
-                resultParts.push(item.text);
-            } else if (typeof item.content === 'string') {
-                resultParts.push(item.content);
-            }
-        } else if (typeof item === 'string') {
-            resultParts.push(item);
+    if (trimmed === 'null') {
+        return '';
+    }
+
+    var jsonParseAttempt = null;
+
+    try {
+        jsonParseAttempt = JSON.parse(trimmed);
+    } catch (e1) {
+        var fixed = trimmed.replace(/'/g, '"');
+        try {
+            jsonParseAttempt = JSON.parse(fixed);
+        } catch (e2) {
         }
     }
-    if (resultParts.length > 0) {
-        return resultParts.join('\n');
-    }
-}
 
-if (typeof jsonParseAttempt === 'object' && jsonParseAttempt !== null && !Array.isArray(jsonParseAttempt)) {
-    if (jsonParseAttempt.type === 'text' && typeof jsonParseAttempt.text === 'string') {
-        return jsonParseAttempt.text;
+    if (jsonParseAttempt === null) {
+        return text;
     }
-    if (typeof jsonParseAttempt.text === 'string') {
-        return jsonParseAttempt.text;
-    }
-    if (typeof jsonParseAttempt.content === 'string') {
-        return jsonParseAttempt.content;
-    }
-}
 
-return text;
+    if (Array.isArray(jsonParseAttempt)) {
+        var resultParts = [];
+        for (var i = 0; i < jsonParseAttempt.length; i++) {
+            var item = jsonParseAttempt[i];
+            if (item && typeof item === 'object') {
+                if (item.type === 'text' && typeof item.text === 'string') {
+                    resultParts.push(item.text);
+                } else if (typeof item.text === 'string') {
+                    resultParts.push(item.text);
+                } else if (typeof item.content === 'string') {
+                    resultParts.push(item.content);
+                }
+            } else if (typeof item === 'string') {
+                resultParts.push(item);
+            }
+        }
+        if (resultParts.length > 0) {
+            return resultParts.join('\n');
+        }
+    }
 
+    if (typeof jsonParseAttempt === 'object' && jsonParseAttempt !== null && !Array.isArray(jsonParseAttempt)) {
+        if (jsonParseAttempt.type === 'text' && typeof jsonParseAttempt.text === 'string') {
+            return jsonParseAttempt.text;
+        }
+        if (typeof jsonParseAttempt.text === 'string') {
+            return jsonParseAttempt.text;
+        }
+        if (typeof jsonParseAttempt.content === 'string') {
+            return jsonParseAttempt.content;
+        }
+    }
+
+    return text;
 }
 
 function validateAndSanitizeParams(temperature, max_tokens) {
@@ -299,6 +305,11 @@ app.post('/v1/chat/completions', async function(req, res) {
         var wantsStream = toBoolean(stream);
         var nimModel = MODEL_MAPPING[model] || model;
 
+        // FIX 2: Strict GLM Token Capping to prevent 400 Bad Request
+        if (nimModel.indexOf('glm') !== -1) {
+            sanitized.max_tokens = Math.min(sanitized.max_tokens, 8192);
+        }
+
         var preset;
         if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
             preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
@@ -318,6 +329,15 @@ app.post('/v1/chat/completions', async function(req, res) {
         }
 
         var enhancedMessages = getEnhancedMessages(nimModel, processedMessages);
+
+        // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
+        var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
+        var finalOtherMsgs = enhancedMessages.filter(function(m) { return m.role !== 'system'; });
+        if (finalSystemMsgs.length > 1) {
+            var combinedFinalSystem = finalSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
+            enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
+        }
+
         var supportsThinking = nimModel.indexOf('deepseek') !== -1 || nimModel.indexOf('thinking') !== -1;
 
         var nimRequest = {
@@ -340,7 +360,9 @@ app.post('/v1/chat/completions', async function(req, res) {
             {
                 headers: {
                     Authorization: 'Bearer ' + NIM_API_KEY,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    // FIX 3: Force the gateway to stream properly
+                    'Accept': wantsStream ? 'text/event-stream' : 'application/json'
                 },
                 responseType: wantsStream ? 'stream' : 'json',
                 timeout: REQUEST_TIMEOUT,
@@ -378,214 +400,191 @@ app.post('/v1/chat/completions', async function(req, res) {
     }
 });
 
-function processDelta(delta) {
-    if (!delta || !SHOW_REASONING) return delta;
-
-    var reasoning = delta.reasoning_content;
-    var content = delta.content;
-
-    if (reasoning) {
-        if (!processDelta._active) {
-            delta.content = THINK_OPEN + '\n' + reasoning;
-            processDelta._active = true;
-        } else {
-            delta.content = reasoning;
-        }
-        delete delta.reasoning_content;
-    } else if (content && processDelta._active) {
-        delta.content = '\n' + THINK_CLOSE + '\n\n' + content;
-        processDelta._active = false;
-    }
-
-    return delta;
-}
-
-processDelta._active = false;
-
 function handleStream(inputStream, res) {
-res.setHeader('Content-Type', 'text/event-stream');
-res.setHeader('Cache-Control', 'no-cache');
-res.setHeader('Connection', 'keep-alive');
-res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
 
-var buffer = '';
-var partialData = '';
-var reasoningActive = false;
+    var buffer = '';
+    var partialData = '';
+    var reasoningActive = false;
 
-function safeWrite(obj) {
-    try {
-        var data = typeof obj === 'string' ? obj : JSON.stringify(obj);
-        res.write('data: ' + data + '\n\n');
-    } catch (e) {
-        console.error('Stream write error:', e.message);
-    }
-}
-
-function processDelta(delta) {
-    if (!delta) return;
-
-    if (SHOW_REASONING) {
-        var reasoning = delta.reasoning_content;
-        var content = delta.content;
-
-        if (reasoning) {
-            var cleanReasoning = cleanStructuredContent(reasoning);
-            if (reasoningActive) {
-                delta.content = cleanReasoning;
-            } else {
-                delta.content = '\u003Cthink\u003E\n' + cleanReasoning;
-                reasoningActive = true;
-            }
-            delete delta.reasoning_content;
-        } else if (content) {
-            var cleanContent = cleanStructuredContent(content);
-            if (reasoningActive) {
-                delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
-                reasoningActive = false;
-            } else {
-                delta.content = cleanContent;
-            }
-        }
-    }
-
-    if (delta.content === null || delta.content === undefined) {
-        return;
-    }
-
-    if (typeof delta.content === 'string' && delta.content.trim() === '') {
-        return;
-    }
-
-    return true;
-}
-
-function processData(rawData) {
-    if (!rawData || rawData.trim() === '') return;
-
-    if (rawData.trim() === '[DONE]') {
-        safeWrite('[DONE]');
-        return;
-    }
-
-    try {
-        var parsed = JSON.parse(rawData);
-        var delta = null;
-        if (parsed && parsed.choices && parsed.choices[0]) {
-            delta = parsed.choices[0].delta;
-        }
-
-        if (delta) {
-            var shouldSend = processDelta(delta);
-            if (shouldSend) {
-                safeWrite(parsed);
-            }
-        }
-    } catch (e) {
-        partialData += rawData;
+    function safeWrite(obj) {
         try {
-            var parsed2 = JSON.parse(partialData);
-            partialData = '';
+            var data = typeof obj === 'string' ? obj : JSON.stringify(obj);
+            res.write('data: ' + data + '\n\n');
+        } catch (e) {
+            console.error('Stream write error:', e.message);
+        }
+    }
 
-            var delta2 = null;
-            if (parsed2 && parsed2.choices && parsed2.choices[0]) {
-                delta2 = parsed2.choices[0].delta;
-            }
-            if (delta2) {
-                var shouldSend2 = processDelta(delta2);
-                if (shouldSend2) {
-                    safeWrite(parsed2);
+    function processDelta(delta) {
+        if (!delta) return;
+
+        if (SHOW_REASONING) {
+            var reasoning = delta.reasoning_content;
+            var content = delta.content;
+
+            if (reasoning) {
+                var cleanReasoning = cleanStructuredContent(reasoning);
+                if (reasoningActive) {
+                    delta.content = cleanReasoning;
+                } else {
+                    delta.content = '\u003Cthink\u003E\n' + cleanReasoning;
+                    reasoningActive = true;
+                }
+                delete delta.reasoning_content;
+            } else if (content) {
+                var cleanContent = cleanStructuredContent(content);
+                if (reasoningActive) {
+                    delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
+                    reasoningActive = false;
+                } else {
+                    delta.content = cleanContent;
                 }
             }
-        } catch (e2) {
-            if (partialData.length > 100000) {
-                console.error('Partial data buffer exceeded, resetting');
+        }
+
+        // FIX 4: Allow the initial role chunk through to start UI sequence
+        if (delta.role) {
+            return true;
+        }
+
+        if (delta.content === null || delta.content === undefined) {
+            return;
+        }
+
+        // Removed the strict `.trim() === ''` check here to allow spaces/newlines
+
+        return true;
+    }
+
+    function processData(rawData) {
+        if (!rawData || rawData.trim() === '') return;
+
+        if (rawData.trim() === '[DONE]') {
+            safeWrite('[DONE]');
+            return;
+        }
+
+        try {
+            var parsed = JSON.parse(rawData);
+            var delta = null;
+            if (parsed && parsed.choices && parsed.choices[0]) {
+                delta = parsed.choices[0].delta;
+            }
+
+            if (delta) {
+                var shouldSend = processDelta(delta);
+                if (shouldSend) {
+                    safeWrite(parsed);
+                }
+            }
+        } catch (e) {
+            partialData += rawData;
+            try {
+                var parsed2 = JSON.parse(partialData);
                 partialData = '';
+
+                var delta2 = null;
+                if (parsed2 && parsed2.choices && parsed2.choices[0]) {
+                    delta2 = parsed2.choices[0].delta;
+                }
+                if (delta2) {
+                    var shouldSend2 = processDelta(delta2);
+                    if (shouldSend2) {
+                        safeWrite(parsed2);
+                    }
+                }
+            } catch (e2) {
+                if (partialData.length > 100000) {
+                    console.error('Partial data buffer exceeded, resetting');
+                    partialData = '';
+                }
             }
         }
     }
-}
 
-inputStream.on('data', function(chunk) {
-    buffer += chunk.toString('utf8');
-    var lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
+    inputStream.on('data', function(chunk) {
+        buffer += chunk.toString('utf8');
+        var lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
 
-    for (var i = 0; i < lines.length; i++) {
-        if (lines[i].indexOf('data: ') !== 0) continue;
-        var dataStr = lines[i].slice(6);
-        processData(dataStr);
-    }
-});
-
-inputStream.on('end', function() {
-    if (buffer.indexOf('data: ') === 0) {
-        processData(buffer.slice(6));
-    }
-
-    if (reasoningActive) {
-        safeWrite({
-            choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
-        });
-        reasoningActive = false;
-    }
-
-    safeWrite('[DONE]');
-    res.end();
-});
-
-inputStream.on('error', function(err) {
-    console.error('Stream error:', err.message);
-    if (!res.headersSent) {
-        res.status(500).json({
-            error: { message: 'Stream processing error', code: 500 }
-        });
-    }
-    res.end();
-});
-
-}
-
-function handleNonStream(data, model, res) {
-try {
-var openaiResponse = {
-id: 'chatcmpl-' + Date.now(),
-object: 'chat.completion',
-created: Math.floor(Date.now() / 1000),
-model: model,
-choices: (data.choices || []).map(function(choice, index) {
-var rawContent = (choice && choice.message && choice.message.content) || '';
-var fullContent = cleanStructuredContent(rawContent);
-
-            if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
-                var rawReasoning = choice.message.reasoning_content;
-                var cleanReasoning = cleanStructuredContent(rawReasoning);
-                fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
-            }
-
-            return {
-                index: choice.index !== undefined ? choice.index : index,
-                message: {
-                    role: (choice && choice.message && choice.message.role) || 'assistant',
-                    content: fullContent
-                },
-                finish_reason: choice.finish_reason || 'stop'
-            };
-        }),
-        usage: data.usage || {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('data: ') !== 0) continue;
+            var dataStr = lines[i].slice(6);
+            processData(dataStr);
         }
-    };
+    });
 
-    res.json(openaiResponse);
-} catch (err) {
-    console.error('Response formatting error:', err.message);
-    res.status(500).json({
-        error: { message: 'Response formatting error', code: 500 }
+    inputStream.on('end', function() {
+        if (buffer.indexOf('data: ') === 0) {
+            processData(buffer.slice(6));
+        }
+
+        if (reasoningActive) {
+            safeWrite({
+                choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
+            });
+            reasoningActive = false;
+        }
+
+        safeWrite('[DONE]');
+        res.end();
+    });
+
+    inputStream.on('error', function(err) {
+        console.error('Stream error:', err.message);
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: { message: 'Stream processing error', code: 500 }
+            });
+        }
+        res.end();
     });
 }
 
+function handleNonStream(data, model, res) {
+    try {
+        var openaiResponse = {
+            id: 'chatcmpl-' + Date.now(),
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model: model,
+            choices: (data.choices || []).map(function(choice, index) {
+                var rawContent = (choice && choice.message && choice.message.content) || '';
+                var fullContent = cleanStructuredContent(rawContent);
+
+                if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
+                    var rawReasoning = choice.message.reasoning_content;
+                    var cleanReasoning = cleanStructuredContent(rawReasoning);
+                    fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
+                }
+
+                return {
+                    index: choice.index !== undefined ? choice.index : index,
+                    message: {
+                        role: (choice && choice.message && choice.message.role) || 'assistant',
+                        content: fullContent
+                    },
+                    finish_reason: choice.finish_reason || 'stop'
+                };
+            }),
+            usage: data.usage || {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0
+            }
+        };
+
+        res.json(openaiResponse);
+    } catch (err) {
+        console.error('Response formatting error:', err.message);
+        res.status(500).json({
+            error: { message: 'Response formatting error', code: 500 }
+        });
+    }
 }
 
 app.listen(PORT, '0.0.0.0', function() {
