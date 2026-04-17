@@ -36,12 +36,12 @@ var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
     'gpt-4': 'z-ai/glm5',
-    'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1',
+    'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1-terminus',
     'gpt-4o': 'deepseek-ai/deepseek-v3.2',
     'gpt-4-0613': 'minimaxai/minimax-m2.7',
     'claude-3-opus': 'moonshotai/kimi-k2-thinking',
     'claude-3-sonnet': 'z-ai/glm4.7',
-    'gemini-pro': 'deepseek-ai/deepseek-v3.1-terminus'
+    'gemini-pro': 'qwen/qwen3.5-397b-a17b'
 };
 
 function isKimiModel(nimModelId) {
@@ -305,10 +305,11 @@ app.post('/v1/chat/completions', async function(req, res) {
         var wantsStream = toBoolean(stream);
         var nimModel = MODEL_MAPPING[model] || model;
 
-        // FIX 2: Strict GLM Token Capping to prevent 400 Bad Request
-        if (nimModel.indexOf('glm') !== -1) {
-            sanitized.max_tokens = Math.min(sanitized.max_tokens, 8192);
-        }
+        // FIX 2 (extended): GLM caps for both tokens AND temperature
+if (nimModel.indexOf('glm') !== -1) {
+    sanitized.max_tokens = Math.min(sanitized.max_tokens, 4096); // safer than 8192
+    sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
+}
 
         var preset;
         if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
@@ -338,7 +339,9 @@ app.post('/v1/chat/completions', async function(req, res) {
             enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
         }
 
-        var supportsThinking = nimModel.indexOf('deepseek') !== -1 || nimModel.indexOf('thinking') !== -1;
+       var supportsThinking = nimModel.indexOf('deepseek-r') !== -1  // R1, R2 variants
+                    || nimModel.indexOf('thinking') !== -1;
+// deepseek-v3.x are NOT reasoning models — don't include them
 
         var nimRequest = {
             model: nimModel,
