@@ -339,9 +339,9 @@ if (nimModel.indexOf('glm') !== -1) {
             enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
         }
 
-       var supportsThinking = nimModel.indexOf('deepseek-r') !== -1  // R1, R2 variants
-                    || nimModel.indexOf('thinking') !== -1;
-// deepseek-v3.x are NOT reasoning models — don't include them
+        var supportsThinking = nimModel.indexOf('deepseek-r') !== -1  // R1, R2 variants
+                           || nimModel.indexOf('thinking') !== -1
+                           || nimModel.indexOf('glm') !== -1;        // GLM-4.7, GLM-5 think by default
 
         var nimRequest = {
             model: nimModel,
@@ -354,6 +354,11 @@ if (nimModel.indexOf('glm') !== -1) {
         if (ENABLE_THINKING_MODE && supportsThinking) {
             nimRequest.extra_body = {
                 chat_template_kwargs: { thinking: true }
+            };
+        } else if (nimModel.indexOf('glm') !== -1) {
+            // GLM thinks by default — explicitly disable if thinking mode is off
+            nimRequest.extra_body = {
+                chat_template_kwargs: { thinking: false }
             };
         }
 
