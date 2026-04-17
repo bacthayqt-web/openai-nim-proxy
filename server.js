@@ -57,7 +57,6 @@ function getPresetForModel(nimModelId) {
     return PRESET_FRANKENSTEIN;
 }
 
-// FIX 1: Merge System Messages in Presets safely
 function buildOrderedMessagesFromPreset(preset, originalMessages) {
     if (!preset || !preset.prompts || preset.prompts.length === 0) {
         return originalMessages;
@@ -77,15 +76,7 @@ function buildOrderedMessagesFromPreset(preset, originalMessages) {
     var systemPresets = presetMessages.filter(function(m) { return m.role === 'system'; });
     var nonSystemPresets = presetMessages.filter(function(m) { return m.role !== 'system'; });
 
-    var allSystemMsgs = existingSystemMsgs.concat(systemPresets);
-    var mergedSystemContent = allSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
-
-    var finalMessages = [];
-    if (mergedSystemContent) {
-        finalMessages.push({ role: 'system', content: mergedSystemContent });
-    }
-
-    return finalMessages.concat(nonSystemPresets).concat(nonSystemMsgs);
+    return existingSystemMsgs.concat(systemPresets).concat(nonSystemPresets).concat(nonSystemMsgs);
 }
 
 app.use(cors());
@@ -120,7 +111,7 @@ function toBoolean(val) {
 function getEnhancedMessages(model, messages) {
     var formattingNudge = {
         role: 'system',
-        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text. You MUST respond with plain text only. Do NOT wrap your response in JSON, arrays, or structured formats like [{"type": "text", "text": "..."}]. Just write your response directly as plain text.\n\nSTRICT FORMATTING RULES:\n1. Speech: Must ALWAYS be enclosed in "double quotes".\n2. Actions & Narration: Must ALWAYS be enclosed in *single asterisks*.\n3. Emphasis: Must ALWAYS be enclosed in **double asterisks**.\n4. Thoughts: Must ALWAYS be enclosed in `backticks`.'
+        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text.'
     };
 
     var hasFormattingInstruction = messages.some(
@@ -150,79 +141,16 @@ function getEnhancedMessages(model, messages) {
         enhanced = [formattingNudge].concat(messages);
     }
 
-    if (model.indexOf('glm') !== -1 || model.indexOf('deepseek') !== -1) {
+    if (model.indexOf('glm') !== -1) {
         var lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-                content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use double line breaks. Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only.]'
+                content: enhanced[lastIndex].content + '\n\n[Formatting Rule: Use clear, separate paragraphs with double line breaks.]'
             });
         }
     }
 
     return enhanced;
-}
-
-function cleanStructuredContent(text) {
-    if (!text || typeof text !== 'string') {
-        return text;
-    }
-
-    var trimmed = text.trim();
-
-    if (trimmed === 'null') {
-        return '';
-    }
-
-    var jsonParseAttempt = null;
-
-    try {
-        jsonParseAttempt = JSON.parse(trimmed);
-    } catch (e1) {
-        var fixed = trimmed.replace(/'/g, '"');
-        try {
-            jsonParseAttempt = JSON.parse(fixed);
-        } catch (e2) {
-        }
-    }
-
-    if (jsonParseAttempt === null) {
-        return text;
-    }
-
-    if (Array.isArray(jsonParseAttempt)) {
-        var resultParts = [];
-        for (var i = 0; i < jsonParseAttempt.length; i++) {
-            var item = jsonParseAttempt[i];
-            if (item && typeof item === 'object') {
-                if (item.type === 'text' && typeof item.text === 'string') {
-                    resultParts.push(item.text);
-                } else if (typeof item.text === 'string') {
-                    resultParts.push(item.text);
-                } else if (typeof item.content === 'string') {
-                    resultParts.push(item.content);
-                }
-            } else if (typeof item === 'string') {
-                resultParts.push(item);
-            }
-        }
-        if (resultParts.length > 0) {
-            return resultParts.join('\n');
-        }
-    }
-
-    if (typeof jsonParseAttempt === 'object' && jsonParseAttempt !== null && !Array.isArray(jsonParseAttempt)) {
-        if (jsonParseAttempt.type === 'text' && typeof jsonParseAttempt.text === 'string') {
-            return jsonParseAttempt.text;
-        }
-        if (typeof jsonParseAttempt.text === 'string') {
-            return jsonParseAttempt.text;
-        }
-        if (typeof jsonParseAttempt.content === 'string') {
-            return jsonParseAttempt.content;
-        }
-    }
-
-    return text;
 }
 
 function validateAndSanitizeParams(temperature, max_tokens) {
@@ -305,12 +233,6 @@ app.post('/v1/chat/completions', async function(req, res) {
         var wantsStream = toBoolean(stream);
         var nimModel = MODEL_MAPPING[model] || model;
 
-        // FIX 2 (extended): GLM caps for both tokens AND temperature
-if (nimModel.indexOf('glm') !== -1) {
-    sanitized.max_tokens = Math.min(sanitized.max_tokens, 4096); // safer than 8192
-    sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
-}
-
         var preset;
         if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
             preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
@@ -330,18 +252,7 @@ if (nimModel.indexOf('glm') !== -1) {
         }
 
         var enhancedMessages = getEnhancedMessages(nimModel, processedMessages);
-
-        // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
-        var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
-        var finalOtherMsgs = enhancedMessages.filter(function(m) { return m.role !== 'system'; });
-        if (finalSystemMsgs.length > 1) {
-            var combinedFinalSystem = finalSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
-            enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
-        }
-
-        var supportsThinking = nimModel.indexOf('deepseek-r') !== -1  // R1, R2 variants
-                           || nimModel.indexOf('thinking') !== -1
-                           || nimModel.indexOf('glm') !== -1;        // GLM-4.7, GLM-5 think by default
+        var supportsThinking = nimModel.indexOf('deepseek') !== -1 || nimModel.indexOf('thinking') !== -1;
 
         var nimRequest = {
             model: nimModel,
@@ -355,11 +266,6 @@ if (nimModel.indexOf('glm') !== -1) {
             nimRequest.extra_body = {
                 chat_template_kwargs: { thinking: true }
             };
-        } else if (nimModel.indexOf('glm') !== -1) {
-            // GLM thinks by default — explicitly disable if thinking mode is off
-            nimRequest.extra_body = {
-                chat_template_kwargs: { thinking: false }
-            };
         }
 
         var response = await axios.post(
@@ -368,9 +274,7 @@ if (nimModel.indexOf('glm') !== -1) {
             {
                 headers: {
                     Authorization: 'Bearer ' + NIM_API_KEY,
-                    'Content-Type': 'application/json',
-                    // FIX 3: Force the gateway to stream properly
-                    'Accept': wantsStream ? 'text/event-stream' : 'application/json'
+                    'Content-Type': 'application/json'
                 },
                 responseType: wantsStream ? 'stream' : 'json',
                 timeout: REQUEST_TIMEOUT,
@@ -408,6 +312,30 @@ if (nimModel.indexOf('glm') !== -1) {
     }
 });
 
+function processDelta(delta) {
+    if (!delta || !SHOW_REASONING) return delta;
+
+    var reasoning = delta.reasoning_content;
+    var content = delta.content;
+
+    if (reasoning) {
+        if (!processDelta._active) {
+            delta.content = THINK_OPEN + '\n' + reasoning;
+            processDelta._active = true;
+        } else {
+            delta.content = reasoning;
+        }
+        delete delta.reasoning_content;
+    } else if (content && processDelta._active) {
+        delta.content = '\n' + THINK_CLOSE + '\n\n' + content;
+        processDelta._active = false;
+    }
+
+    return delta;
+}
+
+processDelta._active = false;
+
 function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -416,7 +344,6 @@ function handleStream(inputStream, res) {
 
     var buffer = '';
     var partialData = '';
-    var reasoningActive = false;
 
     function safeWrite(obj) {
         try {
@@ -427,91 +354,44 @@ function handleStream(inputStream, res) {
         }
     }
 
-    function processDelta(delta) {
-        if (!delta) return;
-
-        if (SHOW_REASONING) {
-            var reasoning = delta.reasoning_content;
-            var content = delta.content;
-
-            if (reasoning) {
-                var cleanReasoning = cleanStructuredContent(reasoning);
-                if (reasoningActive) {
-                    delta.content = cleanReasoning;
-                } else {
-                    delta.content = '\u003Cthink\u003E\n' + cleanReasoning;
-                    reasoningActive = true;
-                }
-                delete delta.reasoning_content;
-            } else if (content) {
-                var cleanContent = cleanStructuredContent(content);
-                if (reasoningActive) {
-                    delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
-                    reasoningActive = false;
-                } else {
-                    delta.content = cleanContent;
-                }
-            }
-        }
-
-        // FIX 4: Allow the initial role chunk through to start UI sequence
-        if (delta.role) {
-            return true;
-        }
-
-        if (delta.content === null || delta.content === undefined) {
-            return;
-        }
-
-        // Removed the strict `.trim() === ''` check here to allow spaces/newlines
-
-        return true;
-    }
-
-    function processData(rawData) {
+    function processChunk(rawData) {
         if (!rawData || rawData.trim() === '') return;
-
         if (rawData.trim() === '[DONE]') {
             safeWrite('[DONE]');
             return;
         }
 
+        var parsed = null;
         try {
-            var parsed = JSON.parse(rawData);
-            var delta = null;
-            if (parsed && parsed.choices && parsed.choices[0]) {
-                delta = parsed.choices[0].delta;
-            }
-
-            if (delta) {
-                var shouldSend = processDelta(delta);
-                if (shouldSend) {
-                    safeWrite(parsed);
-                }
-            }
+            parsed = JSON.parse(rawData);
         } catch (e) {
             partialData += rawData;
             try {
-                var parsed2 = JSON.parse(partialData);
+                parsed = JSON.parse(partialData);
                 partialData = '';
-
-                var delta2 = null;
-                if (parsed2 && parsed2.choices && parsed2.choices[0]) {
-                    delta2 = parsed2.choices[0].delta;
-                }
-                if (delta2) {
-                    var shouldSend2 = processDelta(delta2);
-                    if (shouldSend2) {
-                        safeWrite(parsed2);
-                    }
-                }
             } catch (e2) {
                 if (partialData.length > 100000) {
                     console.error('Partial data buffer exceeded, resetting');
                     partialData = '';
                 }
+                return;
             }
         }
+
+        var delta = null;
+        if (parsed && parsed.choices && parsed.choices[0]) {
+            delta = parsed.choices[0].delta;
+        }
+
+        if (delta) {
+            processDelta(delta);
+
+            if (delta.content === null || delta.content === undefined || delta.content === '') {
+                return;
+            }
+        }
+
+        safeWrite(parsed);
     }
 
     inputStream.on('data', function(chunk) {
@@ -521,21 +401,20 @@ function handleStream(inputStream, res) {
 
         for (var i = 0; i < lines.length; i++) {
             if (lines[i].indexOf('data: ') !== 0) continue;
-            var dataStr = lines[i].slice(6);
-            processData(dataStr);
+            processChunk(lines[i].slice(6));
         }
     });
 
     inputStream.on('end', function() {
         if (buffer.indexOf('data: ') === 0) {
-            processData(buffer.slice(6));
+            processChunk(buffer.slice(6));
         }
 
-        if (reasoningActive) {
+        if (processDelta._active) {
             safeWrite({
-                choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
+                choices: [{ delta: { content: '\n' + THINK_CLOSE } }]
             });
-            reasoningActive = false;
+            processDelta._active = false;
         }
 
         safeWrite('[DONE]');
@@ -561,13 +440,10 @@ function handleNonStream(data, model, res) {
             created: Math.floor(Date.now() / 1000),
             model: model,
             choices: (data.choices || []).map(function(choice, index) {
-                var rawContent = (choice && choice.message && choice.message.content) || '';
-                var fullContent = cleanStructuredContent(rawContent);
+                var fullContent = (choice && choice.message && choice.message.content) || '';
 
                 if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
-                    var rawReasoning = choice.message.reasoning_content;
-                    var cleanReasoning = cleanStructuredContent(rawReasoning);
-                    fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
+                    fullContent = THINK_OPEN + '\n' + choice.message.reasoning_content + '\n' + THINK_CLOSE + '\n\n' + fullContent;
                 }
 
                 return {
