@@ -35,7 +35,7 @@ var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
 
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.5',
-    'gpt-4': 'z-ai/glm5',
+    'gpt-4': 'z-ai/glm-5.1',
     'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1-terminus',
     'gpt-4o': 'deepseek-ai/deepseek-v3.2',
     'gpt-4-0613': 'minimaxai/minimax-m2.7',
