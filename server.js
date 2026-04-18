@@ -607,6 +607,9 @@ function handleNonStream(data, model, res) {
                 if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
                     var rawReasoning = choice.message.reasoning_content;
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
+                    // Strip any <think>/<think> tags the model emitted inside its reasoning_content
+                    // before the proxy wraps the whole block in its own single pair
+                    cleanReasoning = cleanReasoning.replace(/<\/?think>/gi, '');
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
 
