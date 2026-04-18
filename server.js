@@ -54,9 +54,6 @@ function getPresetForModel(nimModelId) {
     if (isKimiModel(nimModelId)) {
         return PRESET_FRANKIMSTEIN;
     }
-    if (nimModelId && nimModelId.indexOf('glm-5.1') !== -1) {
-        return PRESET_FRANKIMSTEIN;
-    }
     return PRESET_FRANKENSTEIN;
 }
 
@@ -264,6 +261,29 @@ function sanitizeThinkTags(text) {
     return THINK_OPEN + '\n' + mergedThink + '\n' + THINK_CLOSE + '\n\n' + nonThinkText;
 }
 
+// Returns true for models whose thinking should be hidden from the frontend.
+function isThinkingHidden(nimModelId) {
+    return nimModelId === 'z-ai/glm-5.1';
+}
+
+// Removes every <think>...</think> block (and its contents) from a string,
+// leaving only the plain response text.
+function stripThinkBlock(text) {
+    if (!text || typeof text !== 'string') return text;
+    var result = text;
+    var openIdx = result.indexOf(THINK_OPEN);
+    while (openIdx !== -1) {
+        var closeIdx = result.indexOf(THINK_CLOSE, openIdx);
+        if (closeIdx === -1) {
+            result = result.slice(0, openIdx).trim();
+            break;
+        }
+        result = result.slice(0, openIdx) + result.slice(closeIdx + THINK_CLOSE.length);
+        openIdx = result.indexOf(THINK_OPEN);
+    }
+    return result.trim();
+}
+
 function validateAndSanitizeParams(temperature, max_tokens) {
     var sanitizedTemp = temperature;
     if (temperature !== undefined && temperature !== null) {
@@ -429,9 +449,9 @@ if (nimModel.indexOf('glm') !== -1) {
         }
 
         if (wantsStream) {
-            handleStream(response.data, res);
+            handleStream(response.data, res, nimModel);
         } else {
-            handleNonStream(response.data, model, res);
+            handleNonStream(response.data, model, res, nimModel);
         }
     } catch (error) {
         console.error('Proxy error:', {
@@ -447,7 +467,7 @@ if (nimModel.indexOf('glm') !== -1) {
     }
 });
 
-function handleStream(inputStream, res) {
+function handleStream(inputStream, res, nimModel) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -456,6 +476,7 @@ function handleStream(inputStream, res) {
     var buffer = '';
     var partialData = '';
     var reasoningActive = false;
+    var hideThinking = isThinkingHidden(nimModel);
 
     function safeWrite(obj) {
         try {
@@ -469,7 +490,23 @@ function handleStream(inputStream, res) {
     function processDelta(delta) {
         if (!delta) return;
 
-        if (SHOW_REASONING) {
+        if (hideThinking) {
+            // GLM 5.1: consume reasoning silently, forward only the final content
+            if (delta.reasoning_content) {
+                delete delta.reasoning_content;
+                delta.content = null;
+                reasoningActive = true;
+                return; // suppress this chunk entirely
+            } else if (delta.content && reasoningActive) {
+                // First real-content chunk after reasoning — send as-is, no tags
+                var cleanContent0 = cleanStructuredContent(delta.content);
+                cleanContent0 = cleanContent0.replace(/<\/?think>/gi, '');
+                delta.content = cleanContent0;
+                reasoningActive = false;
+            } else if (delta.content) {
+                delta.content = cleanStructuredContent(delta.content);
+            }
+        } else if (SHOW_REASONING) {
             var reasoning = delta.reasoning_content;
             var content = delta.content;
 
@@ -596,7 +633,7 @@ function handleStream(inputStream, res) {
     });
 }
 
-function handleNonStream(data, model, res) {
+function handleNonStream(data, model, res, nimModel) {
     try {
         var openaiResponse = {
             id: 'chatcmpl-' + Date.now(),
@@ -618,6 +655,11 @@ function handleNonStream(data, model, res) {
 
                 // Guarantee the final content never contains more than one <think>...</think> pair
                 fullContent = sanitizeThinkTags(fullContent);
+
+                // For models with hidden thinking, strip the block entirely before sending
+                if (isThinkingHidden(nimModel)) {
+                    fullContent = stripThinkBlock(fullContent);
+                }
 
                 return {
                     index: choice.index !== undefined ? choice.index : index,
