@@ -120,7 +120,7 @@ function toBoolean(val) {
 function getEnhancedMessages(model, messages) {
     var formattingNudge = {
         role: 'system',
-        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text. You MUST respond with plain text only. Do NOT wrap your response in JSON, arrays, or structured formats like [{"type": "text", "text": "..."}]. Just write your response directly as plain text.\n\nSTRICT FORMATTING RULES:\n1. Speech: Must ALWAYS be enclosed in "double quotes".\n2. Actions & Narration: Must ALWAYS be enclosed in *single asterisks*.\n3. Emphasis: Must ALWAYS be enclosed in **double asterisks**.\n4. Thoughts: Must ALWAYS be enclosed in `backticks`.\n5. Internal Reasoning: If you use a <think> block, use EXACTLY ONE pair of <think>...</think> tags. Place it at the very start of your response before any other content. Do NOT open or close <think> tags more than once per response.'
+        content: 'CRITICAL INSTRUCTION: Use Markdown. ALWAYS use double line breaks (\\n\\n) between paragraphs. No walls of text. You MUST respond with plain text only. Do NOT wrap your response in JSON, arrays, or structured formats like [{"type": "text", "text": "..."}]. Just write your response directly as plain text.\n\nSTRICT FORMATTING RULES:\n1. Speech: Must ALWAYS be enclosed in "double quotes".\n2. Actions & Narration: Must ALWAYS be enclosed in *single asterisks*.\n3. Emphasis: Must ALWAYS be enclosed in **double asterisks**.\n4. Thoughts: Must ALWAYS be enclosed in `backticks`.'
     };
 
     var hasFormattingInstruction = messages.some(
@@ -225,48 +225,12 @@ function cleanStructuredContent(text) {
     return text;
 }
 
-// Collapse any duplicate <think>...</think> pairs into exactly one.
-// All reasoning content is merged; remaining text follows the single closing tag.
-function sanitizeThinkTags(text) {
-    if (!text || typeof text !== 'string') return text;
-
-    var thinkContents = [];
-    var nonThinkParts = [];
-    var remaining = text;
-
-    while (true) {
-        var openIdx = remaining.indexOf(THINK_OPEN);
-        if (openIdx === -1) {
-            nonThinkParts.push(remaining);
-            break;
-        }
-        nonThinkParts.push(remaining.slice(0, openIdx));
-        remaining = remaining.slice(openIdx + THINK_OPEN.length);
-
-        var closeIdx = remaining.indexOf(THINK_CLOSE);
-        if (closeIdx === -1) {
-            // Unclosed think block — absorb the rest as reasoning
-            thinkContents.push(remaining);
-            remaining = '';
-            break;
-        }
-        thinkContents.push(remaining.slice(0, closeIdx));
-        remaining = remaining.slice(closeIdx + THINK_CLOSE.length);
-    }
-
-    if (thinkContents.length === 0) return text;
-
-    var mergedThink = thinkContents.join('\n').trim();
-    var nonThinkText = nonThinkParts.join('').trim();
-    return THINK_OPEN + '\n' + mergedThink + '\n' + THINK_CLOSE + '\n\n' + nonThinkText;
-}
-
 // Returns true for models whose thinking should be hidden from the frontend.
 function isThinkingHidden(nimModelId) {
     return nimModelId === 'z-ai/glm-5.1';
 }
 
-// Removes every <think>...</think> block (and its contents) from a string,
+// Removes every <think>...</think> block and its contents from a string,
 // leaving only the plain response text.
 function stripThinkBlock(text) {
     if (!text || typeof text !== 'string') return text;
@@ -492,16 +456,14 @@ function handleStream(inputStream, res, nimModel) {
 
         if (hideThinking) {
             // GLM 5.1: consume reasoning silently, forward only actual content.
-            // IMPORTANT: GLM can send reasoning_content and content in the SAME
-            // delta chunk (the transition chunk). We must NOT null out content
-            // in that case, or the first characters of the response get dropped.
+            // GLM can send reasoning_content and content in the SAME delta chunk
+            // (the transition chunk). Must NOT null out content in that case or
+            // the first characters of the response get dropped.
             if (delta.reasoning_content) {
                 delete delta.reasoning_content;
                 if (delta.content) {
                     // Transition chunk — reasoning ends and content starts together.
-                    // Strip any stray think tags and forward the content part.
-                    var tc = cleanStructuredContent(delta.content);
-                    delta.content = tc.replace(/<\/?think>/gi, '');
+                    delta.content = cleanStructuredContent(delta.content);
                     reasoningActive = false;
                 } else {
                     // Pure reasoning chunk — suppress entirely.
@@ -511,8 +473,7 @@ function handleStream(inputStream, res, nimModel) {
                 }
             } else if (delta.content && reasoningActive) {
                 // First standalone content chunk after reasoning.
-                var fc = cleanStructuredContent(delta.content);
-                delta.content = fc.replace(/<\/?think>/gi, '');
+                delta.content = cleanStructuredContent(delta.content);
                 reasoningActive = false;
             } else if (delta.content) {
                 delta.content = cleanStructuredContent(delta.content);
@@ -523,8 +484,6 @@ function handleStream(inputStream, res, nimModel) {
 
             if (reasoning) {
                 var cleanReasoning = cleanStructuredContent(reasoning);
-                // Strip any think tags the model itself emitted — the proxy owns tag injection
-                cleanReasoning = cleanReasoning.replace(/<\/?think>/gi, '');
                 if (reasoningActive) {
                     delta.content = cleanReasoning;
                 } else {
@@ -534,8 +493,6 @@ function handleStream(inputStream, res, nimModel) {
                 delete delta.reasoning_content;
             } else if (content) {
                 var cleanContent = cleanStructuredContent(content);
-                // Strip any think tags the model itself emitted — the proxy owns tag injection
-                cleanContent = cleanContent.replace(/<\/?think>/gi, '');
                 if (reasoningActive) {
                     delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
                     reasoningActive = false;
@@ -658,16 +615,10 @@ function handleNonStream(data, model, res, nimModel) {
                 if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
                     var rawReasoning = choice.message.reasoning_content;
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
-                    // Strip any <think>/<think> tags the model emitted inside its reasoning_content
-                    // before the proxy wraps the whole block in its own single pair
-                    cleanReasoning = cleanReasoning.replace(/<\/?think>/gi, '');
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
 
-                // Guarantee the final content never contains more than one <think>...</think> pair
-                fullContent = sanitizeThinkTags(fullContent);
-
-                // For models with hidden thinking, strip the entire block before sending
+                // For models with hidden thinking, strip the think block before sending
                 if (isThinkingHidden(nimModel)) {
                     fullContent = stripThinkBlock(fullContent);
                 }
