@@ -347,8 +347,15 @@ if (nimModel.indexOf('glm') !== -1) {
     sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
 }
 
+        // TEMPORARY: Exempt GLM 5.1 from all presets to diagnose nested <think> tag issue.
+        // Remove this block once the root cause is confirmed.
+        var GLM51_PRESET_EXEMPT = nimModel === 'z-ai/glm-5.1';
+
         var preset;
-        if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
+        if (GLM51_PRESET_EXEMPT) {
+            preset = null;
+            console.log('[TEMP] GLM 5.1 preset exemption active — skipping preset for ' + nimModel);
+        } else if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
             preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
             console.log('Preset override: ' + preset_override + ' (forced by client)');
         } else {
