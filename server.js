@@ -491,17 +491,28 @@ function handleStream(inputStream, res, nimModel) {
         if (!delta) return;
 
         if (hideThinking) {
-            // GLM 5.1: consume reasoning silently, forward only the final content
+            // GLM 5.1: consume reasoning silently, forward only actual content.
+            // IMPORTANT: GLM can send reasoning_content and content in the SAME
+            // delta chunk (the transition chunk). We must NOT null out content
+            // in that case, or the first characters of the response get dropped.
             if (delta.reasoning_content) {
                 delete delta.reasoning_content;
-                delta.content = null;
-                reasoningActive = true;
-                return; // suppress this chunk entirely
+                if (delta.content) {
+                    // Transition chunk — reasoning ends and content starts together.
+                    // Strip any stray think tags and forward the content part.
+                    var tc = cleanStructuredContent(delta.content);
+                    delta.content = tc.replace(/<\/?think>/gi, '');
+                    reasoningActive = false;
+                } else {
+                    // Pure reasoning chunk — suppress entirely.
+                    delta.content = null;
+                    reasoningActive = true;
+                    return;
+                }
             } else if (delta.content && reasoningActive) {
-                // First real-content chunk after reasoning — send as-is, no tags
-                var cleanContent0 = cleanStructuredContent(delta.content);
-                cleanContent0 = cleanContent0.replace(/<\/?think>/gi, '');
-                delta.content = cleanContent0;
+                // First standalone content chunk after reasoning.
+                var fc = cleanStructuredContent(delta.content);
+                delta.content = fc.replace(/<\/?think>/gi, '');
                 reasoningActive = false;
             } else if (delta.content) {
                 delta.content = cleanStructuredContent(delta.content);
@@ -656,7 +667,7 @@ function handleNonStream(data, model, res, nimModel) {
                 // Guarantee the final content never contains more than one <think>...</think> pair
                 fullContent = sanitizeThinkTags(fullContent);
 
-                // For models with hidden thinking, strip the block entirely before sending
+                // For models with hidden thinking, strip the entire block before sending
                 if (isThinkingHidden(nimModel)) {
                     fullContent = stripThinkBlock(fullContent);
                 }
