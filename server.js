@@ -184,16 +184,6 @@ function cleanStructuredContent(text) {
         return '';
     }
 
-    // Fast path: streaming delta tokens are typically 1–5 characters and can
-    // never be structured JSON. Only attempt parsing if the string starts with
-    // '[' or '{' — the only characters that can open a JSON array or object.
-    // This eliminates ~2 failed JSON.parse calls + a full string replace on
-    // every single token, which was the primary cause of slow throughput for
-    // DeepSeek models (thousands of reasoning tokens × 2 parse attempts each).
-    if (trimmed.length < 2 || (trimmed[0] !== '[' && trimmed[0] !== '{')) {
-        return text;
-    }
-
     var jsonParseAttempt = null;
 
     try {
