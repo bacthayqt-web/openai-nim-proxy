@@ -40,7 +40,7 @@ var MODEL_MAPPING = {
     'gpt-4': 'z-ai/glm-5.1',
     'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1-terminus',
     'gpt-4o': 'deepseek-ai/deepseek-v3.2',
-    'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash',
+    'gpt-4-0613': 'minimaxai/minimax-m2.7',
     'claude-3-opus': 'moonshotai/kimi-k2-thinking',
     'claude-3-sonnet': 'z-ai/glm4.7',
     'gemini-pro': 'deepseek-ai/deepseek-v4-pro'
@@ -182,6 +182,16 @@ function cleanStructuredContent(text) {
 
     if (trimmed === 'null') {
         return '';
+    }
+
+    // Fast path: streaming delta tokens are typically 1–5 characters and can
+    // never be structured JSON. Only attempt parsing if the string starts with
+    // '[' or '{' — the only characters that can open a JSON array or object.
+    // This eliminates ~2 failed JSON.parse calls + a full string replace on
+    // every single token, which was the primary cause of slow throughput for
+    // DeepSeek models (thousands of reasoning tokens × 2 parse attempts each).
+    if (trimmed.length < 2 || (trimmed[0] !== '[' && trimmed[0] !== '{')) {
+        return text;
     }
 
     var jsonParseAttempt = null;
