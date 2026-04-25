@@ -11,9 +11,7 @@ var NIM_API_KEY = process.env.NIM_API_KEY;
 var SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
 var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
-var DEEPSEEK_V4_PRO_REASONING_EFFORT = process.env.DEEPSEEK_V4_PRO_REASONING_EFFORT || 'high';
 var MAX_TEMPERATURE = 2.0;
-var MAX_DEEPSEEK_V4_PRO_TEMPERATURE = 1.0;
 var MAX_MAX_TOKENS = 128000;
 
 var PRESETS_DIR = path.join(__dirname, 'presets');
@@ -50,11 +48,6 @@ function isKimiModel(nimModelId) {
     if (!nimModelId) return false;
     var lower = nimModelId.toLowerCase();
     return lower.indexOf('moonshotai') !== -1 || lower.indexOf('kimi') !== -1;
-}
-
-function isDeepseekV4Pro(nimModelId) {
-    if (!nimModelId) return false;
-    return nimModelId.toLowerCase().indexOf('deepseek-v4-pro') !== -1;
 }
 
 function getPresetForModel(nimModelId) {
@@ -157,11 +150,8 @@ function getEnhancedMessages(model, messages) {
         enhanced = [formattingNudge].concat(messages);
     }
 
-    // DeepSeek V4 Pro is a reasoning model — injecting a formatting reminder
-    // into the user turn contaminates the thinking chain. Skip it.
-    if (!isDeepseekV4Pro(model) &&
-        (model.indexOf('glm') !== -1 || model.indexOf('deepseek') !== -1 ||
-         model.indexOf('kimi') !== -1 || model.indexOf('moonshotai') !== -1)) {
+    if (model.indexOf('glm') !== -1 || model.indexOf('deepseek') !== -1 ||
+        model.indexOf('kimi') !== -1 || model.indexOf('moonshotai') !== -1) {
         var lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
@@ -345,11 +335,6 @@ if (nimModel.indexOf('glm') !== -1) {
     sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
 }
 
-        // DeepSeek V4 Pro: temperature must not exceed 1.0 per NIM docs
-        if (isDeepseekV4Pro(nimModel)) {
-            sanitized.temperature = Math.min(sanitized.temperature, MAX_DEEPSEEK_V4_PRO_TEMPERATURE);
-        }
-
         var preset;
         if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
             preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
@@ -380,8 +365,7 @@ if (nimModel.indexOf('glm') !== -1) {
 
         var supportsThinking = nimModel.indexOf('deepseek-r') !== -1  // R1, R2 variants
                            || nimModel.indexOf('thinking') !== -1
-                           || nimModel.indexOf('glm') !== -1          // GLM-4.7, GLM-5 think by default
-                           || isDeepseekV4Pro(nimModel);              // DeepSeek V4 Pro hybrid reasoning
+                           || nimModel.indexOf('glm') !== -1;        // GLM-4.7, GLM-5 think by default
 
         var nimRequest = {
             model: nimModel,
@@ -392,19 +376,9 @@ if (nimModel.indexOf('glm') !== -1) {
         };
 
         if (ENABLE_THINKING_MODE && supportsThinking) {
-            if (isDeepseekV4Pro(nimModel)) {
-                // V4 Pro requires both thinking:true and reasoning_effort in chat_template_kwargs
-                nimRequest.extra_body = {
-                    chat_template_kwargs: {
-                        thinking: true,
-                        reasoning_effort: DEEPSEEK_V4_PRO_REASONING_EFFORT
-                    }
-                };
-            } else {
-                nimRequest.extra_body = {
-                    chat_template_kwargs: { thinking: true }
-                };
-            }
+            nimRequest.extra_body = {
+                chat_template_kwargs: { thinking: true }
+            };
         } else if (nimModel.indexOf('glm') !== -1) {
             // GLM thinks by default — explicitly disable if thinking mode is off
             nimRequest.extra_body = {
@@ -480,14 +454,6 @@ function handleStream(inputStream, res, nimModel) {
 
     function processDelta(delta) {
         if (!delta) return;
-
-        // DeepSeek V4 Pro (and some NIM versions) may return the reasoning field
-        // as delta.reasoning instead of delta.reasoning_content. Normalize here
-        // so all downstream logic only has to handle one field name.
-        if (delta.reasoning && !delta.reasoning_content) {
-            delta.reasoning_content = delta.reasoning;
-        }
-        delete delta.reasoning;
 
         if (hideThinking) {
             // GLM 5.1: consume reasoning silently, forward only actual content.
@@ -647,11 +613,8 @@ function handleNonStream(data, model, res, nimModel) {
                 var rawContent = (choice && choice.message && choice.message.content) || '';
                 var fullContent = cleanStructuredContent(rawContent);
 
-                // Normalize: some NIM model versions return `reasoning` instead of `reasoning_content`
-                var rawReasoning = choice && choice.message &&
-                    (choice.message.reasoning_content || choice.message.reasoning);
-
-                if (SHOW_REASONING && rawReasoning) {
+                if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
+                    var rawReasoning = choice.message.reasoning_content;
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
@@ -690,7 +653,6 @@ app.listen(PORT, '0.0.0.0', function() {
     console.log('Proxy running on port ' + PORT);
     console.log('   - SHOW_REASONING: ' + SHOW_REASONING);
     console.log('   - ENABLE_THINKING_MODE: ' + ENABLE_THINKING_MODE);
-    console.log('   - DEEPSEEK_V4_PRO_REASONING_EFFORT: ' + DEEPSEEK_V4_PRO_REASONING_EFFORT);
     console.log('   - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
     console.log('   - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
     console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
