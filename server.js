@@ -39,7 +39,7 @@ var MODEL_MAPPING = {
     'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1-terminus',
     'gpt-4o': 'deepseek-ai/deepseek-v3.2',
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash',
-    'claude-3-opus': 'moonshotai/kimi-k2-thinking',
+    'claude-3-opus': 'google/gemma-4-31b-it',
     'claude-3-sonnet': 'z-ai/glm4.7',
     'gemini-pro': 'deepseek-ai/deepseek-v4-pro'
 };
