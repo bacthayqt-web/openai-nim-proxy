@@ -363,7 +363,7 @@ if (nimModel.indexOf('glm') !== -1) {
             enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
         }
 
-        var supportsThinking = nimModel.indexOf('deepseek-r') !== -1  // R1, R2 variants
+        var supportsThinking = nimModel.indexOf('deepseek') !== -1  
                            || nimModel.indexOf('thinking') !== -1
                            || nimModel.indexOf('glm') !== -1;        // GLM-4.7, GLM-5 think by default
 
