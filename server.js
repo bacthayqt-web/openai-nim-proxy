@@ -36,12 +36,12 @@ var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.6',
     'gpt-4': 'z-ai/glm-5.1',
-    'gpt-4-turbo': 'deepseek-ai/deepseek-v3.1-terminus',
-    'gpt-4o': 'deepseek-ai/deepseek-v3.2',
+    'gpt-4-turbo': 'qwen/qwen3.5-397b-a17b',
+    'gpt-4o': 'deepseek-ai/deepseek-v4-pro',
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash',
     'claude-3-opus': 'google/gemma-4-31b-it',
-    'claude-3-sonnet': 'z-ai/glm4.7',
-    'gemini-pro': 'deepseek-ai/deepseek-v4-pro'
+    'claude-3-sonnet': 'nvidia/nemotron-3-super-120b-a12b',
+    'gemini-pro': 'minimaxai/minimax-m2.7'
 };
 
 function isKimiModel(nimModelId) {
