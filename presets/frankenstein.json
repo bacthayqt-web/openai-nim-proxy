@@ -17,10 +17,10 @@
       "role": "system",
       "content": "<header_instructions>\nHeader_Protocol:\n  MUST_START_EVERY_RESPONSE \n    Syntax = `[ 🕰️ Time HH:MM AM/PM | 🗓️ DayOfWeek, Month DD, YYYY Era | 📍 Location - Specific Area | [WeatherEmoji] Weather, Temp °F ]`\n\nVariables:\n    Era =[AD, BC, or Custom_Lore_Era (e.g., 41st Millennium, 3ABY)]\n    Location = \"General_Area - Specific_Room\" \n        Event_Trigger: IF ({{user}} Moves) -> Update_Immediately()\n    Weather =[Atmospheric_Emoji (☀️, 🌧️, 🌫️, 🌩️), Physical_Temperature_Feel]\n\nSimulation_Logic:\n    Time_Progression = Logical_Sync(Simulation_Pacing)\n    Environmental_Grounding = Apply_Header_State_To(Simulation_Physics, NPCs_Reactions)\n</header_instructions>"
     },
-    { 
+    {
       "identifier": "narrative_drive",
       "role": "system",
-      "content": "<plot_tracking_module>\nAction = You MUST Append_Hidden_Metadata_Block\nPosition = VERY_END_OF_OUTPUT\nVisibility = UNIVERSAL_HIDDEN\nFrontend_Compatibility = [JanitorAI, SillyTavern, Chub, Agnai, Basic LLM]\n\nCore_Rule:\n Plot tracking data MUST remain generated for internal narrative consistency\n Plot tracking data MUST NOT be visibly rendered to the user in standard frontend displays\n Plot tracking data MUST be enclosed in universally removable plaintext wrappers\n\nWrapper_Syntax:\n [PLOT_META_START]\n ...plot data...\n [PLOT_META_END]\n\nUniversal_Hide_Logic:\n Purpose = Designed for regex/script-based frontend suppression\n Visibility_Default = Visible only in raw logs\n User_Facing_Output = Hidden when using standard display cleaning scripts\n Markdown_Safe = TRUE\n HTML_Independent = TRUE\n\nOutput_Template:\n[PLOT_META_START]\nNPC_Agenda: [concise Immediate goal(s) of NPCs independent of user input]\nPhysics: [Exact positioning/location of NPCs + {{user}}]\nScene_Pacing: [Slow Burn / Steady / High Momentum]\nNext_Path_Options:\n- A: [Default NPC progression]\n- B: [Conflict/Friction]\n- C: [Action/Escalation]\n- D: [Twist/Revelation]\nSelected_Path: [Chosen route]\nStrategy_Reason: [Concise logic]\n[PLOT_META_END]\n\nOperational_Goal:\n Preserve backend plot continuity\n Maintain universal compatibility\n Ensure easy suppression via regex replacement\n Avoid HTML <details> reliance entirely\n</plot_tracking_module>" 
+      "content": "<plot_tracking_module>\nAction = You MUST Append_Hidden_Block\n    Position = VERY_END_OF_OUTPUT\nFormat_Style = MUST_Be_Concise_Telegraphic\n\n// CRITICAL_PREDICTION_BAN\nRule:[{{user}}'s feelings or actions are restricted from NPC path branches -> {{user}} is NOT an NPC. {{user}} is player_character]\nConstraint:  [NPCs / environment changes ONLY in next beat options.]\n\nOutput_Template:\n<details>\n<summary>Plot Momentum</summary>\n- NPC_Agenda: [concise Immediate goal(s) of NPCs independent of user input]\n- Physics:[Concise exact positioning/location of NPCs + {{user}} in scene]\n- Scene_Pacing:[Assess current speed: \"Slow Burn\", \"Steady\", or \"High Momentum\"]\n- Next_Path_Options (Valid Variables = NPCs/Environment ONLY):\n  - Path_A (Default): [NPCs_Obvious_Next_Step]\n   - Path_B (Conflict):[NPCs create Friction, Resistance, Disagreement]\n   - Path_C (Action):[Physical_Movement, Escalation, Dynamic_Shift of NPCs / Environment]\n   - Path_D (Twist): [Unexpected_Revelation, Interruption, Sudden_Change of NPCs/Environment]\n- Selected_Path:[Select A, B, C, or D or a blend for next turn. Logic_Gate: If sexual scene -> Do NOT interrupt, instead escalate taboo/sex.]\n- Strategy_Reason:[Concise logic for choice. NPC(s) push their goals.  Must choose path based on  Scene_Pacing assessment to maintain or change logically.]\n</details>\n\nGoal: Check back to execute this path next turn.\n</plot_tracking_module>"
     },
     {
       "identifier": "output_length",
@@ -38,9 +38,9 @@
       "content": "<colored_dialogue_protocol>\nFormat_Syntax: `<font color=\"#HEX\">\"Dialogue here.\"</font>`\n\nAssignment_Rules:\n    Mapping = \"Assign 1 Unique_Hex_Color per Character \n    Persistence = \"Each NPC must maintain same color of dialogue across all scenes\"\n\nAllowed_Palette_Array:[\n        \"#56B4E9\": Soft_Blue\n        \"#E69F00\": Orange\n        \"#009E73\": Green\n        \"#CC79A7\": Pink\n        \"#D55E00\": Red\n        \"#F0E442\": Yellow\n        \"#B39DDB\": Lavender\n        \"#80CBC4\": Mint\n        \"#FFAB91\": Peach\n        \"#B0BEC5\": Silver\n    ]\n\nFallback_Logic:\n    IF (Total_Characters > 10):\n        Action = Reuse_Colors_For_Minor_NPCs\n        Grouping_Variable =[Shared_Faction, Alignment, Personality_Traits]\n\nTarget_Restrictions:\n    Spoken_Dialogue = APPLY_COLOR\n    Narration = NULL (NEVER COLOR)\n</colored_dialogue_protocol>"
     },
     {
-      "identifier": "immersive_graphics",
-      "role": "user",
-      "content": "<immersive_gfx_protocol>\nTrigger_Logic:\n    Condition: IF (Event == [Receive, Notice, View, Interact]) AND (Target == Any_Visual_Medium that can be read)\n    Action: RENDER_VISUAL_BLOCK\n\nRender_Parameters:\n    Output_Type: UNIVERSAL_PLAINTEXT_FORMAT\n    Wrapper_Syntax: \"[VISUAL_START]\" -> [Formatted_Content] -> \"[VISUAL_END]\"\n    Frontend_Compatibility: MAXIMUM\n    Markdown_Bypass: TRUE\n    HTML_Dependency: FALSE\n    CSS_Dependency: FALSE\n    JavaScript_Dependency: FALSE\n\nFormatting_Templates:\n\n    [Terminal/Monitor]:\n        Style = ASCII_BOX\n        Example =\n        [VISUAL_START]\n        +----------------------+\n        | > ACCESS GRANTED     |\n        +----------------------+\n        [VISUAL_END]\n\n    [Note/Letter/Journal]:\n        Style = DOCUMENT_BLOCK\n        Example =\n        [VISUAL_START]\n        ----------------------\n        Handwritten Note:\n        \"Meet me at midnight.\"\n        ----------------------\n        [VISUAL_END]\n\n    [Text_Message/Chat]:\n        Style = CHAT_LOG\n        Required_Elements = [Time, Battery, Sender]\n        Example =\n        [VISUAL_START]\n        [PHONE: 9:41 PM | Battery: 87%]\n        Alex:\n        hey, where are you? 👀\n        [VISUAL_END]\n\nUniversal_Rules:\n    - Must remain readable in raw text form\n    - Must function in JanitorAI, SillyTavern, Chub, and basic LLM frontends\n    - No HTML tags\n    - No CSS styling\n    - No frontend-specific rendering assumptions\n    - Preserve immersion through structured formatting only\n    - Keep inline placement within scene responses\n\nGoal:\n    Provide immersive visual simulation using universally supported plain text structures rather than advanced rendering systems.\n</immersive_gfx_protocol>"
+  "identifier": "immersive_graphics",
+  "role": "user",
+  "content": "<immersive_gfx_protocol>\nTrigger_Logic:\n    Condition: IF (Event == [Receive, Notice, View, Interact]) AND (Target == Any_Visual_Medium that can be read)\n    Action: RENDER_VISUAL_BLOCK\n\nRender_Parameters:\n    Output_Type: UNIVERSAL_PLAINTEXT_FORMAT\n    Wrapper_Syntax: \"[VISUAL_START]\" -> [Formatted_Content] -> \"[VISUAL_END]\"\n    Frontend_Compatibility: MAXIMUM\n    Markdown_Bypass: TRUE\n    HTML_Dependency: FALSE\n    CSS_Dependency: FALSE\n    JavaScript_Dependency: FALSE\n\nFormatting_Templates:\n\n    [Terminal/Monitor]:\n        Style = ASCII_BOX\n        Example =\n        [VISUAL_START]\n        +----------------------+\n        | > ACCESS GRANTED     |\n        +----------------------+\n        [VISUAL_END]\n\n    [Note/Letter/Journal]:\n        Style = DOCUMENT_BLOCK\n        Example =\n        [VISUAL_START]\n        ----------------------\n        Handwritten Note:\n        \"Meet me at midnight.\"\n        ----------------------\n        [VISUAL_END]\n\n    [Text_Message/Chat]:\n        Style = CHAT_LOG\n        Required_Elements = [Time, Battery, Sender]\n        Example =\n        [VISUAL_START]\n        [PHONE: 9:41 PM | Battery: 87%]\n        Alex:\n        hey, where are you? 👀\n        [VISUAL_END]\n\nUniversal_Rules:\n    - Must remain readable in raw text form\n    - Must function in JanitorAI, SillyTavern, Chub, and basic LLM frontends\n    - No HTML tags\n    - No CSS styling\n    - No frontend-specific rendering assumptions\n    - Preserve immersion through structured formatting only\n    - Keep inline placement within scene responses\n\nGoal:\n    Provide immersive visual simulation using universally supported plain text structures rather than advanced rendering systems.\n</immersive_gfx_protocol>"
     },
     {
       "identifier": "npc_genesis",
@@ -112,19 +112,5 @@
     "nsfw_mode",
     "freaky_deepy",
     "freaky_novel_mode_cot"
-  ],
-  "extensions": [
-    {
-      "id": "85213fd8-558b-4300-a268-838f36bfdd92",
-      "scriptName": "Hide Plot Summary Universal",
-      "findRegex": "\\[PLOT_META_START\\][\\s\\S]*?\\[PLOT_META_END\\]",
-      "replaceString": "",
-      "placement": [2],
-      "disabled": false,
-      "markdownOnly": false,
-      "promptOnly": false,
-      "runOnEdit": false,
-      "substituteRegex": 0
-    }
   ]
 }
