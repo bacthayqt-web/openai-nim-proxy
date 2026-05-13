@@ -341,9 +341,14 @@ if (nimModel.indexOf('glm') !== -1) {
             enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
         }
 
-        var supportsThinking = nimModel.indexOf('deepseek') !== -1  
+        var supportsThinking = nimModel.indexOf('deepseek') !== -1
                            || nimModel.indexOf('thinking') !== -1
-                           || nimModel.indexOf('glm') !== -1;        // GLM-4.7, GLM-5 think by default
+                           || nimModel.indexOf('glm') !== -1
+                           || nimModel.indexOf('kimi') !== -1
+                           || nimModel.indexOf('moonshotai') !== -1
+                           || nimModel.indexOf('qwen') !== -1
+                           || nimModel.indexOf('minimax') !== -1
+                           || nimModel.indexOf('nemotron') !== -1;
 
         var nimRequest = {
             model: nimModel,
