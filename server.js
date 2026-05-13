@@ -8,8 +8,8 @@ var PORT = process.env.PORT || 3000;
 
 var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 var NIM_API_KEY = process.env.NIM_API_KEY;
-var SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
-var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
+var SHOW_REASONING = process.env.SHOW_REASONING !== 'true';
+var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'true';
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
 var MAX_TEMPERATURE = 2.0;
 var MAX_MAX_TOKENS = 128000;
@@ -226,28 +226,6 @@ function cleanStructuredContent(text) {
     return text;
 }
 
-// Returns true for models whose thinking should be hidden from the frontend.
-function isThinkingHidden(nimModelId) {
-    return nimModelId === 'z-ai/glm-5.1';
-}
-
-// Removes every <think>...</think> block and its contents from a string,
-// leaving only the plain response text.
-function stripThinkBlock(text) {
-    if (!text || typeof text !== 'string') return text;
-    var result = text;
-    var openIdx = result.indexOf(THINK_OPEN);
-    while (openIdx !== -1) {
-        var closeIdx = result.indexOf(THINK_CLOSE, openIdx);
-        if (closeIdx === -1) {
-            result = result.slice(0, openIdx).trim();
-            break;
-        }
-        result = result.slice(0, openIdx) + result.slice(closeIdx + THINK_CLOSE.length);
-        openIdx = result.indexOf(THINK_OPEN);
-    }
-    return result.trim();
-}
 
 function validateAndSanitizeParams(temperature, max_tokens) {
     var sanitizedTemp = temperature;
@@ -363,9 +341,14 @@ if (nimModel.indexOf('glm') !== -1) {
             enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
         }
 
-        var supportsThinking = nimModel.indexOf('deepseek') !== -1  
+        var supportsThinking = nimModel.indexOf('deepseek') !== -1
                            || nimModel.indexOf('thinking') !== -1
-                           || nimModel.indexOf('glm') !== -1;        // GLM-4.7, GLM-5 think by default
+                           || nimModel.indexOf('glm') !== -1
+                           || nimModel.indexOf('kimi') !== -1
+                           || nimModel.indexOf('moonshotai') !== -1
+                           || nimModel.indexOf('qwen') !== -1
+                           || nimModel.indexOf('minimax') !== -1
+                           || nimModel.indexOf('nemotron') !== -1;
 
         var nimRequest = {
             model: nimModel,
@@ -414,9 +397,9 @@ if (nimModel.indexOf('glm') !== -1) {
         }
 
         if (wantsStream) {
-            handleStream(response.data, res, nimModel);
+            handleStream(response.data, res);
         } else {
-            handleNonStream(response.data, model, res, nimModel);
+            handleNonStream(response.data, model, res);
         }
     } catch (error) {
         console.error('Proxy error:', {
@@ -432,7 +415,7 @@ if (nimModel.indexOf('glm') !== -1) {
     }
 });
 
-function handleStream(inputStream, res, nimModel) {
+function handleStream(inputStream, res) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -441,7 +424,6 @@ function handleStream(inputStream, res, nimModel) {
     var buffer = '';
     var partialData = '';
     var reasoningActive = false;
-    var hideThinking = isThinkingHidden(nimModel);
 
     function safeWrite(obj) {
         try {
@@ -455,31 +437,7 @@ function handleStream(inputStream, res, nimModel) {
     function processDelta(delta) {
         if (!delta) return;
 
-        if (hideThinking) {
-            // GLM 5.1: consume reasoning silently, forward only actual content.
-            // GLM can send reasoning_content and content in the SAME delta chunk
-            // (the transition chunk). Must NOT null out content in that case or
-            // the first characters of the response get dropped.
-            if (delta.reasoning_content) {
-                delete delta.reasoning_content;
-                if (delta.content) {
-                    // Transition chunk — reasoning ends and content starts together.
-                    delta.content = cleanStructuredContent(delta.content);
-                    reasoningActive = false;
-                } else {
-                    // Pure reasoning chunk — suppress entirely.
-                    delta.content = null;
-                    reasoningActive = true;
-                    return;
-                }
-            } else if (delta.content && reasoningActive) {
-                // First standalone content chunk after reasoning.
-                delta.content = cleanStructuredContent(delta.content);
-                reasoningActive = false;
-            } else if (delta.content) {
-                delta.content = cleanStructuredContent(delta.content);
-            }
-        } else if (SHOW_REASONING) {
+        if (SHOW_REASONING) {
             var reasoning = delta.reasoning_content;
             var content = delta.content;
 
@@ -602,7 +560,7 @@ function handleStream(inputStream, res, nimModel) {
     });
 }
 
-function handleNonStream(data, model, res, nimModel) {
+function handleNonStream(data, model, res) {
     try {
         var openaiResponse = {
             id: 'chatcmpl-' + Date.now(),
@@ -619,10 +577,6 @@ function handleNonStream(data, model, res, nimModel) {
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
 
-                // For models with hidden thinking, strip the think block before sending
-                if (isThinkingHidden(nimModel)) {
-                    fullContent = stripThinkBlock(fullContent);
-                }
 
                 return {
                     index: choice.index !== undefined ? choice.index : index,
