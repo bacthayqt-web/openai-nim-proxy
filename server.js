@@ -8,8 +8,8 @@ var PORT = process.env.PORT || 3000;
 
 var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 var NIM_API_KEY = process.env.NIM_API_KEY;
-var SHOW_REASONING = process.env.SHOW_REASONING !== 'false';
-var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'false';
+var SHOW_REASONING = process.env.SHOW_REASONING !== 'true';
+var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE !== 'true';
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
 var MAX_TEMPERATURE = 2.0;
 var MAX_MAX_TOKENS = 128000;
