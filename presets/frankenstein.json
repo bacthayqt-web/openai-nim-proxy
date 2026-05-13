@@ -38,9 +38,9 @@
       "content": "<colored_dialogue_protocol>\nFormat_Syntax: `<font color=\"#HEX\">\"Dialogue here.\"</font>`\n\nAssignment_Rules:\n    Mapping = \"Assign 1 Unique_Hex_Color per Character \n    Persistence = \"Each NPC must maintain same color of dialogue across all scenes\"\n\nAllowed_Palette_Array:[\n        \"#56B4E9\": Soft_Blue\n        \"#E69F00\": Orange\n        \"#009E73\": Green\n        \"#CC79A7\": Pink\n        \"#D55E00\": Red\n        \"#F0E442\": Yellow\n        \"#B39DDB\": Lavender\n        \"#80CBC4\": Mint\n        \"#FFAB91\": Peach\n        \"#B0BEC5\": Silver\n    ]\n\nFallback_Logic:\n    IF (Total_Characters > 10):\n        Action = Reuse_Colors_For_Minor_NPCs\n        Grouping_Variable =[Shared_Faction, Alignment, Personality_Traits]\n\nTarget_Restrictions:\n    Spoken_Dialogue = APPLY_COLOR\n    Narration = NULL (NEVER COLOR)\n</colored_dialogue_protocol>"
     },
     {
-  "identifier": "immersive_graphics",
-  "role": "user",
-  "content": "<immersive_gfx_protocol>\nTrigger_Logic:\n    Condition: IF (Event == [Receive, Notice, View, Interact]) AND (Target == Any_Visual_Medium that can be read)\n    Action: RENDER_VISUAL_BLOCK\n\nRender_Parameters:\n    Output_Type: UNIVERSAL_PLAINTEXT_FORMAT\n    Wrapper_Syntax: \"[VISUAL_START]\" -> [Formatted_Content] -> \"[VISUAL_END]\"\n    Frontend_Compatibility: MAXIMUM\n    Markdown_Bypass: TRUE\n    HTML_Dependency: FALSE\n    CSS_Dependency: FALSE\n    JavaScript_Dependency: FALSE\n\nFormatting_Templates:\n\n    [Terminal/Monitor]:\n        Style = ASCII_BOX\n        Example =\n        [VISUAL_START]\n        +----------------------+\n        | > ACCESS GRANTED     |\n        +----------------------+\n        [VISUAL_END]\n\n    [Note/Letter/Journal]:\n        Style = DOCUMENT_BLOCK\n        Example =\n        [VISUAL_START]\n        ----------------------\n        Handwritten Note:\n        \"Meet me at midnight.\"\n        ----------------------\n        [VISUAL_END]\n\n    [Text_Message/Chat]:\n        Style = CHAT_LOG\n        Required_Elements = [Time, Battery, Sender]\n        Example =\n        [VISUAL_START]\n        [PHONE: 9:41 PM | Battery: 87%]\n        Alex:\n        hey, where are you? 👀\n        [VISUAL_END]\n\nUniversal_Rules:\n    - Must remain readable in raw text form\n    - Must function in JanitorAI, SillyTavern, Chub, and basic LLM frontends\n    - No HTML tags\n    - No CSS styling\n    - No frontend-specific rendering assumptions\n    - Preserve immersion through structured formatting only\n    - Keep inline placement within scene responses\n\nGoal:\n    Provide immersive visual simulation using universally supported plain text structures rather than advanced rendering systems.\n</immersive_gfx_protocol>"
+      "identifier": "immersive_graphics",
+      "role": "user",
+      "content": "<immersive_gfx_protocol>\nTrigger_Logic:\n    Condition: IF (Event == [Receive, Notice, View, Interact]) AND (Target == Any_Visual_Medium that can be read)\n    Action: RENDER_VISUAL_BLOCK\n\nRender_Parameters:\n    Output_Type: UNIVERSAL_PLAINTEXT_FORMAT\n    Wrapper_Syntax: \"[VISUAL_START]\" -> [Formatted_Content] -> \"[VISUAL_END]\"\n    Frontend_Compatibility: MAXIMUM\n    Markdown_Bypass: TRUE\n    HTML_Dependency: FALSE\n    CSS_Dependency: FALSE\n    JavaScript_Dependency: FALSE\n\nFormatting_Templates:\n\n    [Terminal/Monitor]:\n        Style = ASCII_BOX\n        Example =\n        [VISUAL_START]\n        +----------------------+\n        | > ACCESS GRANTED     |\n        +----------------------+\n        [VISUAL_END]\n\n    [Note/Letter/Journal]:\n        Style = DOCUMENT_BLOCK\n        Example =\n        [VISUAL_START]\n        ----------------------\n        Handwritten Note:\n        \"Meet me at midnight.\"\n        ----------------------\n        [VISUAL_END]\n\n    [Text_Message/Chat]:\n        Style = CHAT_LOG\n        Required_Elements = [Time, Battery, Sender]\n        Example =\n        [VISUAL_START]\n        [PHONE: 9:41 PM | Battery: 87%]\n        Alex:\n        hey, where are you? 👀\n        [VISUAL_END]\n\nUniversal_Rules:\n    - Must remain readable in raw text form\n    - Must function in JanitorAI, SillyTavern, Chub, and basic LLM frontends\n    - No HTML tags\n    - No CSS styling\n    - No frontend-specific rendering assumptions\n    - Preserve immersion through structured formatting only\n    - Keep inline placement within scene responses\n\nGoal:\n    Provide immersive visual simulation using universally supported plain text structures rather than advanced rendering systems.\n</immersive_gfx_protocol>"
     },
     {
       "identifier": "npc_genesis",
@@ -112,5 +112,24 @@
     "nsfw_mode",
     "freaky_deepy",
     "freaky_novel_mode_cot"
+  ],
+  "extensions": [
+    {
+      "id": "85213fd8-558b-4300-a268-838f36bfdd92",
+      "scriptName": "Hide Plot Summary",
+      "findRegex": "<details>\\s*<summary>Plot Momentum<\\/summary>[\\s\\S]*?<\\/details>",
+      "replaceString": "",
+      "trimStrings": [],
+      "placement": [
+        2
+      ],
+      "disabled": false,
+      "markdownOnly": true,
+      "promptOnly": false,
+      "runOnEdit": false,
+      "substituteRegex": 0,
+      "minDepth": null,
+      "maxDepth": null
+    }
   ]
 }
