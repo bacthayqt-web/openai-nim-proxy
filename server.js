@@ -358,14 +358,31 @@ if (nimModel.indexOf('glm') !== -1) {
             stream: wantsStream
         };
 
-        if (ENABLE_THINKING_MODE && supportsThinking) {
+        if (isKimiModel(nimModel)) {
+            // Kimi: chat_template_kwargs must be at ROOT payload level, not inside extra_body
+            nimRequest.chat_template_kwargs = { thinking: ENABLE_THINKING_MODE };
+
+        } else if (nimModel.indexOf('glm') !== -1) {
+            // GLM: correct keys are enable_thinking + clear_thinking (NOT "thinking")
+            nimRequest.extra_body = {
+                chat_template_kwargs: {
+                    enable_thinking: ENABLE_THINKING_MODE,
+                    clear_thinking: false
+                }
+            };
+
+        } else if (nimModel.indexOf('deepseek') !== -1) {
+            // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
+            // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
+            var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
+            nimRequest.extra_body = {
+                chat_template_kwargs: { thinking: deepseekThinking }
+            };
+
+        } else if (ENABLE_THINKING_MODE && supportsThinking) {
+            // All other thinking-capable models (Qwen, Nemotron, MiniMax, etc.)
             nimRequest.extra_body = {
                 chat_template_kwargs: { thinking: true }
-            };
-        } else if (nimModel.indexOf('glm') !== -1) {
-            // GLM thinks by default — explicitly disable if thinking mode is off
-            nimRequest.extra_body = {
-                chat_template_kwargs: { thinking: false }
             };
         }
 
