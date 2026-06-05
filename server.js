@@ -40,7 +40,7 @@ var MODEL_MAPPING = {
     'gpt-4o': 'deepseek-ai/deepseek-v4-pro',
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash',
     'claude-3-opus': 'google/gemma-4-31b-it',
-    'claude-3-sonnet': 'nvidia/nemotron-3-super-120b-a12b',
+    'claude-3-sonnet': 'nvidia/nemotron-3-ultra-550b-a55b',
     'gemini-pro': 'minimaxai/minimax-m2.7'
 };
 
