@@ -170,7 +170,7 @@ function cleanStructuredContent(text) {
 
     var trimmed = text.trim();
 
-    if (trimmed === 'null') {
+    if (trimmed.toLowerCase() === 'null') {
         return '';
     }
 
@@ -308,10 +308,10 @@ app.post('/v1/chat/completions', async function(req, res) {
         var nimModel = MODEL_MAPPING[model] || model;
 
         // FIX 2 (extended): GLM caps for both tokens AND temperature
-if (nimModel.indexOf('glm') !== -1) {
-    sanitized.max_tokens = Math.min(sanitized.max_tokens, 4096); // safer than 8192
-    sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
-}
+        if (nimModel.indexOf('glm') !== -1) {
+            sanitized.max_tokens = Math.min(sanitized.max_tokens, 4096); // safer than 8192
+            sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
+        }
 
         var preset;
         if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
