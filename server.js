@@ -363,12 +363,11 @@ app.post('/v1/chat/completions', async function(req, res) {
             nimRequest.chat_template_kwargs = { thinking: ENABLE_THINKING_MODE };
 
         } else if (nimModel.indexOf('glm') !== -1) {
-            // GLM: correct keys are enable_thinking + clear_thinking (NOT "thinking")
-            nimRequest.extra_body = {
-                chat_template_kwargs: {
-                    enable_thinking: ENABLE_THINKING_MODE,
-                    clear_thinking: false
-                }
+            // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
+            // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
+            // as it is not a documented GLM 5.1 parameter and can also trigger a 400.
+            nimRequest.chat_template_kwargs = {
+                enable_thinking: ENABLE_THINKING_MODE
             };
 
         } else if (nimModel.indexOf('deepseek') !== -1) {
