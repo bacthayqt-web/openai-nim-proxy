@@ -32,6 +32,7 @@ function loadPreset(presetName) {
 
 var PRESET_FRANKENSTEIN = loadPreset('frankenstein');
 var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
+var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
 
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.6',
@@ -50,7 +51,15 @@ function isKimiModel(nimModelId) {
     return lower.indexOf('moonshotai') !== -1 || lower.indexOf('kimi') !== -1;
 }
 
+function isDeepSeekModel(nimModelId) {
+    if (!nimModelId) return false;
+    return nimModelId.toLowerCase().indexOf('deepseek') !== -1;
+}
+
 function getPresetForModel(nimModelId) {
+    if (isDeepSeekModel(nimModelId)) {
+        return PRESET_FREAKYDEEPY;
+    }
     if (isKimiModel(nimModelId)) {
         return PRESET_FRANKIMSTEIN;
     }
@@ -108,6 +117,14 @@ app.get('/v1/presets', function(req, res) {
             name: PRESET_FRANKIMSTEIN.name,
             description: PRESET_FRANKIMSTEIN.description,
             model_type: 'kimi'
+        });
+    }
+    if (PRESET_FREAKYDEEPY) {
+        presets.push({
+            id: 'freakydeepy',
+            name: PRESET_FREAKYDEEPY.name,
+            description: PRESET_FREAKYDEEPY.description,
+            model_type: 'deepseek'
         });
     }
     res.json({ presets: presets });
@@ -257,7 +274,8 @@ app.get('/health', function(req, res) {
         timeout_seconds: REQUEST_TIMEOUT / 1000,
         presets: {
             frankenstein: !!PRESET_FRANKENSTEIN,
-            frankimstein: !!PRESET_FRANKIMSTEIN
+            frankimstein: !!PRESET_FRANKIMSTEIN,
+            freakydeepy: !!PRESET_FREAKYDEEPY
         }
     });
 });
@@ -268,7 +286,14 @@ app.get('/v1/models', function(req, res) {
         var preset = getPresetForModel(nimModel);
         var presetLabel = 'none';
         if (preset) {
-            presetLabel = preset.name.toLowerCase().indexOf('kim') !== -1 ? 'frankimstein' : 'frankenstein';
+            var presetLower = preset.name.toLowerCase();
+            if (presetLower.indexOf('kim') !== -1) {
+                presetLabel = 'frankimstein';
+            } else if (presetLower.indexOf('freaky') !== -1 || presetLower.indexOf('deepy') !== -1) {
+                presetLabel = 'freakydeepy';
+            } else {
+                presetLabel = 'frankenstein';
+            }
         }
         return {
             id: id,
@@ -314,8 +339,14 @@ app.post('/v1/chat/completions', async function(req, res) {
         }
 
         var preset;
-        if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein')) {
-            preset = preset_override === 'frankimstein' ? PRESET_FRANKIMSTEIN : PRESET_FRANKENSTEIN;
+        if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein' || preset_override === 'freakydeepy')) {
+            if (preset_override === 'frankimstein') {
+                preset = PRESET_FRANKIMSTEIN;
+            } else if (preset_override === 'freakydeepy') {
+                preset = PRESET_FREAKYDEEPY;
+            } else {
+                preset = PRESET_FRANKENSTEIN;
+            }
             console.log('Preset override: ' + preset_override + ' (forced by client)');
         } else {
             preset = getPresetForModel(nimModel);
@@ -626,6 +657,7 @@ app.listen(PORT, '0.0.0.0', function() {
     console.log('   - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
     console.log('   - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
     console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
+    console.log('   - FreakyDeepy preset loaded: ' + (PRESET_FREAKYDEEPY ? 'YES' : 'NO'));
 
     if (!NIM_API_KEY) {
         console.warn('WARNING: NIM_API_KEY is missing!');
