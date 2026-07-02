@@ -38,7 +38,7 @@ var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
 
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.6',
-    'gpt-4': 'z-ai/glm-5.1',
+    'gpt-4': 'z-ai/glm-5.2',
     'gpt-4-turbo': 'stepfun-ai/step-3.7-flash',
     'gpt-4o': 'deepseek-ai/deepseek-v4-pro',
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash',
