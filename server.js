@@ -60,9 +60,6 @@ function getPresetForModel(nimModelId) {
     if (isDeepSeekModel(nimModelId)) {
         return PRESET_FREAKYDEEPY;
     }
-    if (isKimiModel(nimModelId)) {
-        return PRESET_FRANKIMSTEIN;
-    }
     return PRESET_FRANKENSTEIN;
 }
 
