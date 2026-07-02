@@ -8,6 +8,8 @@ var PORT = process.env.PORT || 3000;
 
 var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 var NIM_API_KEY = process.env.NIM_API_KEY;
+var AION_API_BASE = process.env.AION_API_BASE || 'https://api.aionlabs.ai/v1';
+var AION_API_KEY = process.env.AION_API_KEY;
 var SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
@@ -42,7 +44,8 @@ var MODEL_MAPPING = {
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash',
     'claude-3-opus': 'google/gemma-4-31b-it',
     'claude-3-sonnet': 'nvidia/nemotron-3-ultra-550b-a55b',
-    'gemini-pro': 'minimaxai/minimax-m3'
+    'gemini-pro': 'minimaxai/minimax-m3',
+    'aion-roleplay': 'aion-labs/aion-2.0'
 };
 
 function isKimiModel(nimModelId) {
@@ -54,6 +57,11 @@ function isKimiModel(nimModelId) {
 function isDeepSeekModel(nimModelId) {
     if (!nimModelId) return false;
     return nimModelId.toLowerCase().indexOf('deepseek') !== -1;
+}
+
+function isAionModel(nimModelId) {
+    if (!nimModelId) return false;
+    return nimModelId.toLowerCase().indexOf('aion-labs') !== -1;
 }
 
 function getPresetForModel(nimModelId) {
@@ -269,6 +277,10 @@ app.get('/health', function(req, res) {
         reasoning_display: SHOW_REASONING,
         thinking_mode: ENABLE_THINKING_MODE,
         timeout_seconds: REQUEST_TIMEOUT / 1000,
+        providers: {
+            nim_configured: !!NIM_API_KEY,
+            aion_configured: !!AION_API_KEY
+        },
         presets: {
             frankenstein: !!PRESET_FRANKENSTEIN,
             frankimstein: !!PRESET_FRANKIMSTEIN,
@@ -306,12 +318,6 @@ app.get('/v1/models', function(req, res) {
 
 app.post('/v1/chat/completions', async function(req, res) {
     try {
-        if (!NIM_API_KEY) {
-            return res.status(500).json({
-                error: { message: 'NIM_API_KEY missing', code: 500 }
-            });
-        }
-
         var model = req.body.model;
         var messages = req.body.messages;
         var temperature = req.body.temperature;
@@ -328,6 +334,21 @@ app.post('/v1/chat/completions', async function(req, res) {
         var sanitized = validateAndSanitizeParams(temperature, max_tokens);
         var wantsStream = toBoolean(stream);
         var nimModel = MODEL_MAPPING[model] || model;
+
+        // Route per-model to the correct upstream. Aion Labs is a separate
+        // OpenAI-compatible provider from NIM, with its own base URL and key.
+        var targetIsAion = isAionModel(nimModel);
+        var activeApiBase = targetIsAion ? AION_API_BASE : NIM_API_BASE;
+        var activeApiKey = targetIsAion ? AION_API_KEY : NIM_API_KEY;
+
+        if (!activeApiKey) {
+            return res.status(500).json({
+                error: {
+                    message: (targetIsAion ? 'AION_API_KEY' : 'NIM_API_KEY') + ' missing',
+                    code: 500
+                }
+            });
+        }
 
         // FIX 2 (extended): GLM caps for both tokens AND temperature
         if (nimModel.indexOf('glm') !== -1) {
@@ -386,40 +407,46 @@ app.post('/v1/chat/completions', async function(req, res) {
             stream: wantsStream
         };
 
-        if (isKimiModel(nimModel)) {
-            // Kimi: chat_template_kwargs must be at ROOT payload level, not inside extra_body
-            nimRequest.chat_template_kwargs = { thinking: ENABLE_THINKING_MODE };
+        // All chat_template_kwargs handling below is NIM-specific (it works around how NIM's
+        // gateway merges vLLM/SGLang chat-template params). Aion Labs is a plain OpenAI-compatible
+        // endpoint that doesn't document or expect this field — sending it is the same class of
+        // bug that caused the GLM 400s, so Aion requests skip this whole block entirely.
+        if (!targetIsAion) {
+            if (isKimiModel(nimModel)) {
+                // Kimi: chat_template_kwargs must be at ROOT payload level, not inside extra_body
+                nimRequest.chat_template_kwargs = { thinking: ENABLE_THINKING_MODE };
 
-        } else if (nimModel.indexOf('glm') !== -1) {
-            // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
-            // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
-            // as it is not a documented GLM 5.1 parameter and can also trigger a 400.
-            nimRequest.chat_template_kwargs = {
-                enable_thinking: ENABLE_THINKING_MODE
-            };
+            } else if (nimModel.indexOf('glm') !== -1) {
+                // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
+                // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
+                // as it is not a documented GLM 5.1 parameter and can also trigger a 400.
+                nimRequest.chat_template_kwargs = {
+                    enable_thinking: ENABLE_THINKING_MODE
+                };
 
-        } else if (nimModel.indexOf('deepseek') !== -1) {
-            // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
-            // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
-            // chat_template_kwargs must be at ROOT payload level, not inside extra_body
-            // (extra_body is an OpenAI-SDK-only abstraction; this server posts raw JSON via axios,
-            // so a literal extra_body key is sent as-is and NIM will not merge it — same class of
-            // bug that caused the GLM 400s).
-            var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
-            nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
+            } else if (nimModel.indexOf('deepseek') !== -1) {
+                // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
+                // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
+                // chat_template_kwargs must be at ROOT payload level, not inside extra_body
+                // (extra_body is an OpenAI-SDK-only abstraction; this server posts raw JSON via axios,
+                // so a literal extra_body key is sent as-is and NIM will not merge it — same class of
+                // bug that caused the GLM 400s).
+                var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
+                nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
 
-        } else if (ENABLE_THINKING_MODE && supportsThinking) {
-            // All other thinking-capable models (Qwen, Nemotron, MiniMax, etc.)
-            // Same root-level requirement applies here.
-            nimRequest.chat_template_kwargs = { thinking: true };
+            } else if (ENABLE_THINKING_MODE && supportsThinking) {
+                // All other thinking-capable models (Qwen, Nemotron, MiniMax, etc.)
+                // Same root-level requirement applies here.
+                nimRequest.chat_template_kwargs = { thinking: true };
+            }
         }
 
         var response = await axios.post(
-            NIM_API_BASE + '/chat/completions',
+            activeApiBase + '/chat/completions',
             nimRequest,
             {
                 headers: {
-                    Authorization: 'Bearer ' + NIM_API_KEY,
+                    Authorization: 'Bearer ' + activeApiKey,
                     'Content-Type': 'application/json',
                     // FIX 3: Force the gateway to stream properly
                     'Accept': wantsStream ? 'text/event-stream' : 'application/json'
@@ -659,6 +686,11 @@ app.listen(PORT, '0.0.0.0', function() {
 
     if (!NIM_API_KEY) {
         console.warn('WARNING: NIM_API_KEY is missing!');
+    }
+    if (!AION_API_KEY) {
+        console.warn('WARNING: AION_API_KEY is missing (aion-labs/* models will fail)!');
+    } else {
+        console.log('   - Aion Labs configured: ' + AION_API_BASE);
     }
 
     console.log('');
