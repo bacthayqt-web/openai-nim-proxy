@@ -401,16 +401,17 @@ app.post('/v1/chat/completions', async function(req, res) {
         } else if (nimModel.indexOf('deepseek') !== -1) {
             // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
             // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
+            // chat_template_kwargs must be at ROOT payload level, not inside extra_body
+            // (extra_body is an OpenAI-SDK-only abstraction; this server posts raw JSON via axios,
+            // so a literal extra_body key is sent as-is and NIM will not merge it — same class of
+            // bug that caused the GLM 400s).
             var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
-            nimRequest.extra_body = {
-                chat_template_kwargs: { thinking: deepseekThinking }
-            };
+            nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
 
         } else if (ENABLE_THINKING_MODE && supportsThinking) {
             // All other thinking-capable models (Qwen, Nemotron, MiniMax, etc.)
-            nimRequest.extra_body = {
-                chat_template_kwargs: { thinking: true }
-            };
+            // Same root-level requirement applies here.
+            nimRequest.chat_template_kwargs = { thinking: true };
         }
 
         var response = await axios.post(
