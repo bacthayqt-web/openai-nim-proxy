@@ -352,7 +352,7 @@ app.post('/v1/chat/completions', async function(req, res) {
 
         // FIX 2 (extended): GLM caps for both tokens AND temperature
         if (nimModel.indexOf('glm') !== -1) {
-            sanitized.max_tokens = Math.min(sanitized.max_tokens, 4096); // safer than 8192
+            sanitized.max_tokens = Math.min(sanitized.max_tokens, 16384); // matches NVIDIA's GLM 5.2 reference (raised from 4096, which was a 5.1-era margin)
             sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
         }
 
@@ -419,7 +419,9 @@ app.post('/v1/chat/completions', async function(req, res) {
             } else if (nimModel.indexOf('glm') !== -1) {
                 // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
                 // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
-                // as it is not a documented GLM 5.1 parameter and can also trigger a 400.
+                // as it caused a 400 on NIM for GLM 5.1; not re-added for 5.2 since that hasn't been
+                // verified against NIM's endpoint specifically (other providers document it as valid
+                // for preserved multi-turn thinking, but NIM's behavior may differ).
                 nimRequest.chat_template_kwargs = {
                     enable_thinking: ENABLE_THINKING_MODE
                 };
