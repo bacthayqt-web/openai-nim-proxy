@@ -444,9 +444,14 @@ app.post('/v1/chat/completions', async function(req, res) {
 
         if (response.status >= 400) {
             if (res.headersSent) return;
+            console.error('NVIDIA upstream ' + response.status + ' for model ' + nimModel + ':', JSON.stringify(response.data));
             var errorMessage = 'Upstream error';
             if (response.data && response.data.error) {
+                // OpenAI-style nested shape: { error: { message, code } }
                 errorMessage = response.data.error.message || response.data.error.code || errorMessage;
+            } else if (response.data && response.data.message) {
+                // vLLM/NIM flat shape: { object: "error", message, code }
+                errorMessage = response.data.message;
             }
             return res.status(response.status).json({
                 error: { message: errorMessage, code: response.status }
