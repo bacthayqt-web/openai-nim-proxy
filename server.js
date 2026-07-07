@@ -444,14 +444,33 @@ app.post('/v1/chat/completions', async function(req, res) {
 
         if (response.status >= 400) {
             if (res.headersSent) return;
-            console.error('NVIDIA upstream ' + response.status + ' for model ' + nimModel + ':', JSON.stringify(response.data));
+
+            // When wantsStream is true, responseType above was 'stream', so axios does NOT
+            // parse the body even on error responses -- response.data is the raw Node stream
+            // (sockets/agents included), not JSON. We have to read it ourselves to get NIM's
+            // actual error text. On the non-stream path, response.data is already parsed JSON.
+            var parsedErrorBody = null;
+            if (wantsStream && response.data && typeof response.data.on === 'function') {
+                var rawErrorBody = await new Promise(function(resolve) {
+                    var chunks = [];
+                    response.data.on('data', function(c) { chunks.push(c); });
+                    response.data.on('end', function() { resolve(Buffer.concat(chunks).toString('utf8')); });
+                    response.data.on('error', function() { resolve(''); });
+                });
+                try { parsedErrorBody = JSON.parse(rawErrorBody); } catch (e) { /* leave null */ }
+                console.error('NVIDIA upstream ' + response.status + ' for model ' + nimModel + ' (raw body):', rawErrorBody);
+            } else {
+                parsedErrorBody = (response.data && typeof response.data === 'object') ? response.data : null;
+                console.error('NVIDIA upstream ' + response.status + ' for model ' + nimModel + ':', JSON.stringify(parsedErrorBody));
+            }
+
             var errorMessage = 'Upstream error';
-            if (response.data && response.data.error) {
+            if (parsedErrorBody && parsedErrorBody.error) {
                 // OpenAI-style nested shape: { error: { message, code } }
-                errorMessage = response.data.error.message || response.data.error.code || errorMessage;
-            } else if (response.data && response.data.message) {
+                errorMessage = parsedErrorBody.error.message || parsedErrorBody.error.code || errorMessage;
+            } else if (parsedErrorBody && parsedErrorBody.message) {
                 // vLLM/NIM flat shape: { object: "error", message, code }
-                errorMessage = response.data.message;
+                errorMessage = parsedErrorBody.message;
             }
             return res.status(response.status).json({
                 error: { message: errorMessage, code: response.status }
