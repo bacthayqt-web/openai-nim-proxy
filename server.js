@@ -31,7 +31,6 @@ function loadPreset(presetName) {
 }
 
 var PRESET_FRANKENSTEIN = loadPreset('frankenstein');
-var PRESET_FRANKENSTEIN_JAI = loadPreset('frankensteinJAI');
 var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
 var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
 
@@ -57,18 +56,11 @@ function isDeepSeekModel(nimModelId) {
     return nimModelId.toLowerCase().indexOf('deepseek') !== -1;
 }
 
-function getPresetForModel(nimModelId, basePreset) {
+function getPresetForModel(nimModelId) {
     if (isDeepSeekModel(nimModelId)) {
         return PRESET_FREAKYDEEPY;
     }
-    return basePreset || PRESET_FRANKENSTEIN;
-}
-
-// Frontend is determined by which URL path the request came in on
-// (Janitor AI's proxy field points at /janitor/v1/chat/completions).
-function detectFrontend(req) {
-    if (req.path.indexOf('/janitor/') === 0) return 'janitor';
-    return 'default';
+    return PRESET_FRANKENSTEIN;
 }
 
 // FIX 1: Merge System Messages in Presets safely
@@ -113,14 +105,6 @@ app.get('/v1/presets', function(req, res) {
             id: 'frankenstein',
             name: PRESET_FRANKENSTEIN.name,
             description: PRESET_FRANKENSTEIN.description,
-            model_type: 'non-kimi'
-        });
-    }
-    if (PRESET_FRANKENSTEIN_JAI) {
-        presets.push({
-            id: 'frankensteinJAI',
-            name: PRESET_FRANKENSTEIN_JAI.name,
-            description: PRESET_FRANKENSTEIN_JAI.description,
             model_type: 'non-kimi'
         });
     }
@@ -290,7 +274,6 @@ app.get('/health', function(req, res) {
         },
         presets: {
             frankenstein: !!PRESET_FRANKENSTEIN,
-            frankensteinJAI: !!PRESET_FRANKENSTEIN_JAI,
             frankimstein: !!PRESET_FRANKIMSTEIN,
             freakydeepy: !!PRESET_FREAKYDEEPY
         }
@@ -324,7 +307,7 @@ app.get('/v1/models', function(req, res) {
     res.json({ object: 'list', data: models });
 });
 
-app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async function(req, res) {
+app.post('/v1/chat/completions', async function(req, res) {
     try {
         var model = req.body.model;
         var messages = req.body.messages;
@@ -358,23 +341,18 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
         }
 
-        var frontend = detectFrontend(req);
-        var basePreset = (frontend === 'janitor' && PRESET_FRANKENSTEIN_JAI) ? PRESET_FRANKENSTEIN_JAI : PRESET_FRANKENSTEIN;
-
         var preset;
-        if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankensteinJAI' || preset_override === 'frankimstein' || preset_override === 'freakydeepy')) {
+        if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein' || preset_override === 'freakydeepy')) {
             if (preset_override === 'frankimstein') {
                 preset = PRESET_FRANKIMSTEIN;
             } else if (preset_override === 'freakydeepy') {
                 preset = PRESET_FREAKYDEEPY;
-            } else if (preset_override === 'frankensteinJAI') {
-                preset = PRESET_FRANKENSTEIN_JAI;
             } else {
                 preset = PRESET_FRANKENSTEIN;
             }
             console.log('Preset override: ' + preset_override + ' (forced by client)');
         } else {
-            preset = getPresetForModel(nimModel, basePreset);
+            preset = getPresetForModel(nimModel);
         }
 
         var processedMessages = messages;
@@ -712,7 +690,6 @@ app.listen(PORT, '0.0.0.0', function() {
     console.log('   - ENABLE_THINKING_MODE: ' + ENABLE_THINKING_MODE);
     console.log('   - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
     console.log('   - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
-    console.log('   - FrankensteinJAI preset loaded: ' + (PRESET_FRANKENSTEIN_JAI ? 'YES' : 'NO'));
     console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
     console.log('   - FreakyDeepy preset loaded: ' + (PRESET_FREAKYDEEPY ? 'YES' : 'NO'));
 
