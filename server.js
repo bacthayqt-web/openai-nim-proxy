@@ -56,6 +56,22 @@ function isDeepSeekModel(nimModelId) {
     return nimModelId.toLowerCase().indexOf('deepseek') !== -1;
 }
 
+// Frontend is determined by which URL path the request came in on
+// (Janitor AI's proxy field points at /janitor/v1/chat/completions).
+function detectFrontend(req) {
+    if (req.path.indexOf('/janitor/') === 0) return 'janitor';
+    return 'default';
+}
+
+// Per-frontend content overrides, keyed by prompt identifier. Unlike a full
+// duplicated preset, this only swaps individual prompt entries (e.g. Janitor
+// can't render raw inline HTML, so it gets a markdown-fenced version of just
+// the immersive_graphics prompt) while everything else in the preset stays
+// byte-for-byte identical across frontends.
+var PROMPT_OVERRIDES = {
+    janitor: loadPreset('overrides.janitor') || {}
+};
+
 function getPresetForModel(nimModelId) {
     if (isDeepSeekModel(nimModelId)) {
         return PRESET_FREAKYDEEPY;
@@ -64,17 +80,20 @@ function getPresetForModel(nimModelId) {
 }
 
 // FIX 1: Merge System Messages in Presets safely
-function buildOrderedMessagesFromPreset(preset, originalMessages) {
+function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverrides) {
     if (!preset || !preset.prompts || preset.prompts.length === 0) {
         return originalMessages;
     }
 
+    var overrides = promptOverrides || {};
+
     var presetMessages = preset.prompts
         .filter(function(p) { return p.content && p.content.trim() !== ''; })
         .map(function(p) {
+            var content = overrides[p.identifier] || p.content;
             return {
                 role: p.role || 'system',
-                content: p.content.trim()
+                content: content.trim()
             };
         });
 
@@ -307,7 +326,7 @@ app.get('/v1/models', function(req, res) {
     res.json({ object: 'list', data: models });
 });
 
-app.post('/v1/chat/completions', async function(req, res) {
+app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async function(req, res) {
     try {
         var model = req.body.model;
         var messages = req.body.messages;
@@ -358,8 +377,10 @@ app.post('/v1/chat/completions', async function(req, res) {
         var processedMessages = messages;
 
         if (preset) {
-            processedMessages = buildOrderedMessagesFromPreset(preset, messages);
-            console.log('Preset applied: ' + preset.name + ' for model ' + nimModel);
+            var frontend = detectFrontend(req);
+            var promptOverrides = PROMPT_OVERRIDES[frontend];
+            processedMessages = buildOrderedMessagesFromPreset(preset, messages, promptOverrides);
+            console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');
             console.log('   - Preset prompts injected: ' + preset.prompts.length);
         } else {
             console.log('No preset available for model ' + nimModel + ', using raw messages');
