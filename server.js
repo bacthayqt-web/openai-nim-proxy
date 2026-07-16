@@ -56,6 +56,12 @@ function isDeepSeekModel(nimModelId) {
     return nimModelId.toLowerCase().indexOf('deepseek') !== -1;
 }
 
+function isInklingModel(nimModelId) {
+    if (!nimModelId) return false;
+    var lower = nimModelId.toLowerCase();
+    return lower.indexOf('thinkingmachines') !== -1 || lower.indexOf('inkling') !== -1;
+}
+
 // Frontend is determined by which URL path the request came in on
 // (Janitor AI's proxy field points at /janitor/v1/chat/completions).
 function detectFrontend(req) {
@@ -439,6 +445,18 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
                 // bug that caused the GLM 400s).
                 var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
                 nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
+
+            } else if (isInklingModel(nimModel)) {
+                // Inkling reasons BY DEFAULT (per Thinking Machines' docs), so
+                // ENABLE_THINKING_MODE=false must explicitly send reasoning_effort: "none" --
+                // omitting the field does NOT disable it, unlike the other providers above.
+                // Also note: Inkling takes a string enum here, not a boolean `thinking` flag,
+                // and its model id ("thinkingmachines/inkling") would otherwise false-positive
+                // match the generic `nimModel.indexOf('thinking')` check below, so this branch
+                // must stay ahead of that catch-all.
+                nimRequest.chat_template_kwargs = {
+                    reasoning_effort: ENABLE_THINKING_MODE ? 'high' : 'none'
+                };
 
             } else if (ENABLE_THINKING_MODE && supportsThinking) {
                 // All other thinking-capable models (Qwen, Nemotron, MiniMax, etc.)
