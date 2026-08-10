@@ -180,6 +180,8 @@ function prepareFF5History(messages) {
         return script.promptOnly && !script.markdownOnly;
     });
 
+    var hiddenJanitorState = /<!--\s*FF5_INTERNAL_STATE\b[\s\S]*?END_FF5_INTERNAL_STATE\s*-->/g;
+
     return messages.map(function(message, index) {
         if (!message || typeof message.content !== 'string' || message.role !== 'assistant') {
             return message;
@@ -192,7 +194,16 @@ function prepareFF5History(messages) {
             return true;
         });
 
-        return Object.assign({}, message, { content: runRegexScripts(message.content, applicable) });
+        var cleanedContent = runRegexScripts(message.content, applicable);
+
+        // Janitor renders the newest FF5 state as a hidden HTML comment. Keep
+        // that newest state available to the model, but remove older copies so
+        // invisible bookkeeping cannot grow without bound in the prompt.
+        if (depth >= 2) {
+            cleanedContent = cleanedContent.replace(hiddenJanitorState, '');
+        }
+
+        return Object.assign({}, message, { content: cleanedContent });
     });
 }
 
@@ -283,7 +294,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
                 ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences.'
-                : '\n\nJANITOR RENDERING: Use Markdown only. Never output raw HTML, CSS, details/summary tags, or GFX wrapper comments.')
+                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative. Never output visible raw HTML, CSS, details/summary tags, or GFX wrapper comments. The sole exception is the required hidden <!-- FF5_INTERNAL_STATE ... END_FF5_INTERNAL_STATE --> comment at the absolute end of the response. Emit that comment exactly as instructed, outside code fences; do not display or explain it.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -509,6 +520,22 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
 
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
+            if (preset === PRESET_FRANKENSTEIN && frontend === 'janitor') {
+                var latestAssistantMessage = null;
+                for (var historyIndex = messages.length - 1; historyIndex >= 0; historyIndex--) {
+                    if (messages[historyIndex] && messages[historyIndex].role === 'assistant') {
+                        latestAssistantMessage = messages[historyIndex];
+                        break;
+                    }
+                }
+                var hiddenStateRestored = !!(
+                    latestAssistantMessage &&
+                    typeof latestAssistantMessage.content === 'string' &&
+                    latestAssistantMessage.content.indexOf('<!-- FF5_INTERNAL_STATE') !== -1
+                );
+                console.log('Janitor hidden Internal State restored from history: ' +
+                    (hiddenStateRestored ? 'YES' : 'NO (normal on first turn)'));
+            }
             var sourceMessages = preset === PRESET_FRANKENSTEIN ? prepareFF5History(messages) : messages;
             processedMessages = buildOrderedMessagesFromPreset(preset, sourceMessages, promptOverrides);
             console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');

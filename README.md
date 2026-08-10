@@ -38,8 +38,11 @@ Use the Janitor-specific route in Janitor AI:
 https://YOUR-PROXY/janitor/v1/chat/completions
 ```
 
-That route replaces only the graphics and status templates with portable
-Markdown. All narrative and simulation prompts remain the same.
+That route converts Pop-in Graphics to portable Markdown and stores Internal
+States in a hidden `FF5_INTERNAL_STATE` HTML comment at the end of each raw
+response. The latest hidden state remains available to the model on the next
+turn, while older copies are removed from prompt context to control token use.
+All narrative and simulation prompts remain the same.
 
 ## Environment
 
