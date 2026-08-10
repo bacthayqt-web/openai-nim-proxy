@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node tests/preset.test.js && node tests/stream.test.js"
   },
   "engines": {
     "node": ">=18"

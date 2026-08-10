@@ -33,6 +33,7 @@ function loadPreset(presetName) {
 var PRESET_FRANKENSTEIN = loadPreset('frankenstein');
 var PRESET_FRANKIMSTEIN = loadPreset('frankimstein');
 var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
+var FF5_REGEX = loadPreset('ff5-regex') || [];
 
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k2.6',
@@ -85,6 +86,124 @@ function getPresetForModel(nimModelId) {
     return PRESET_FRANKENSTEIN;
 }
 
+function getOrderedPresetPrompts(preset) {
+    if (!preset || !Array.isArray(preset.prompts)) return [];
+    if (!Array.isArray(preset.prompt_order) || preset.prompt_order.length === 0) {
+        return preset.prompts;
+    }
+
+    var byId = {};
+    preset.prompts.forEach(function(prompt) {
+        byId[prompt.identifier] = prompt;
+    });
+
+    return preset.prompt_order.map(function(identifier) {
+        return byId[identifier];
+    }).filter(Boolean);
+}
+
+// Expand the SillyTavern macros used inside FF5 while leaving ordinary card
+// macros such as {{user}} and {{char}} untouched for the upstream frontend.
+// Inner macros are evaluated first, which also supports getvar calls nested
+// inside setvar templates.
+function expandPresetMacros(input, variables) {
+    var text = String(input || '');
+    var vars = variables || {};
+    var innermostMacro = /\{\{([^{}]*)\}\}/g;
+
+    for (var pass = 0; pass < 1000; pass++) {
+        var changed = false;
+        text = text.replace(innermostMacro, function(full, body) {
+            if (body.indexOf('//') === 0 || body.trim() === 'trim') {
+                changed = true;
+                return '';
+            }
+
+            var firstSeparator = body.indexOf('::');
+            if (firstSeparator === -1) return full;
+
+            var command = body.slice(0, firstSeparator).trim();
+            var rest = body.slice(firstSeparator + 2);
+            var secondSeparator = rest.indexOf('::');
+            var name = secondSeparator === -1 ? rest : rest.slice(0, secondSeparator);
+            var value = secondSeparator === -1 ? '' : rest.slice(secondSeparator + 2);
+
+            if (command === 'setvar') {
+                vars[name] = value;
+                changed = true;
+                return '';
+            }
+            if (command === 'getvar') {
+                changed = true;
+                return Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : value;
+            }
+            if (command === 'roll' && /^1d20$/i.test(name)) {
+                changed = true;
+                return String(Math.floor(Math.random() * 20) + 1);
+            }
+
+            return full;
+        });
+
+        if (!changed) break;
+    }
+
+    return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function parseRegexLiteral(literal) {
+    if (typeof literal !== 'string' || literal.charAt(0) !== '/') return null;
+    var lastSlash = literal.lastIndexOf('/');
+    if (lastSlash <= 0) return null;
+    try {
+        return new RegExp(literal.slice(1, lastSlash), literal.slice(lastSlash + 1));
+    } catch (err) {
+        console.warn('Invalid FF5 regex skipped: ' + err.message);
+        return null;
+    }
+}
+
+function runRegexScripts(text, scripts) {
+    var output = String(text || '');
+    (scripts || []).forEach(function(script) {
+        if (!script || script.disabled) return;
+        var regex = parseRegexLiteral(script.findRegex);
+        if (regex) output = output.replace(regex, script.replaceString || '');
+    });
+    return output;
+}
+
+function prepareFF5History(messages) {
+    var cleanupScripts = FF5_REGEX.filter(function(script) {
+        // These are the machine-tag/context cleanup rules. Relationship-bar
+        // styling is intentionally excluded from model context.
+        return script.promptOnly && !script.markdownOnly;
+    });
+
+    return messages.map(function(message, index) {
+        if (!message || typeof message.content !== 'string' || message.role !== 'assistant') {
+            return message;
+        }
+
+        var depth = messages.length - 1 - index;
+        var applicable = cleanupScripts.filter(function(script) {
+            if (script.minDepth !== null && script.minDepth !== undefined && depth < script.minDepth) return false;
+            if (script.maxDepth !== null && script.maxDepth !== undefined && depth > script.maxDepth) return false;
+            return true;
+        });
+
+        return Object.assign({}, message, { content: runRegexScripts(message.content, applicable) });
+    });
+}
+
+function applyFrontendDisplay(text, frontend, enabled) {
+    if (!enabled || frontend === 'janitor') return text;
+    var displayScripts = FF5_REGEX.filter(function(script) {
+        return !script.promptOnly;
+    });
+    return runRegexScripts(text, displayScripts);
+}
+
 // FIX 1: Merge System Messages in Presets safely
 function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverrides) {
     if (!preset || !preset.prompts || preset.prompts.length === 0) {
@@ -93,15 +212,17 @@ function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverride
 
     var overrides = promptOverrides || {};
 
-    var presetMessages = preset.prompts
+    var macroVariables = {};
+    var presetMessages = getOrderedPresetPrompts(preset)
         .filter(function(p) { return p.content && p.content.trim() !== ''; })
         .map(function(p) {
             var content = overrides[p.identifier] || p.content;
             return {
                 role: p.role || 'system',
-                content: content.trim()
+                content: expandPresetMacros(content, macroVariables)
             };
-        });
+        })
+        .filter(function(message) { return message.content !== ''; });
 
     var existingSystemMsgs = originalMessages.filter(function(m) { return m.role === 'system'; });
     var nonSystemMsgs = originalMessages.filter(function(m) { return m.role !== 'system'; });
@@ -156,10 +277,13 @@ function toBoolean(val) {
     return val === true || val === 'true';
 }
 
-function getEnhancedMessages(model, messages) {
+function getEnhancedMessages(model, messages, allowHtmlUI) {
     var formattingNudge = {
         role: 'system',
-        content: 'CRITICAL INSTRUCTION: Use Markdown. You MUST respond with plain text only. Do NOT wrap your response in JSON, arrays, or structured formats like [{"type": "text", "text": "..."}]. Just write your response directly as plain text.\n\nSTRICT FORMATTING RULES:\n1. Paragraph Breaks: ALWAYS insert a blank line between paragraphs — that means two newline characters (one empty line) separating every paragraph, every time. Never run paragraphs together. No walls of text.\n2. Speech: Must ALWAYS be enclosed in "double quotes".\n3. Actions & Narration: Must ALWAYS be enclosed in *single asterisks*.\n4. Emphasis: Must ALWAYS be enclosed in **double asterisks**.\n5. Thoughts: Must ALWAYS be enclosed in `backticks`.'
+        content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
+            (allowHtmlUI
+                ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences.'
+                : '\n\nJANITOR RENDERING: Use Markdown only. Never output raw HTML, CSS, details/summary tags, or GFX wrapper comments.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -380,19 +504,22 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             preset = getPresetForModel(nimModel);
         }
 
+        var frontend = detectFrontend(req);
         var processedMessages = messages;
 
         if (preset) {
-            var frontend = detectFrontend(req);
             var promptOverrides = PROMPT_OVERRIDES[frontend];
-            processedMessages = buildOrderedMessagesFromPreset(preset, messages, promptOverrides);
+            var sourceMessages = preset === PRESET_FRANKENSTEIN ? prepareFF5History(messages) : messages;
+            processedMessages = buildOrderedMessagesFromPreset(preset, sourceMessages, promptOverrides);
             console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');
             console.log('   - Preset prompts injected: ' + preset.prompts.length);
         } else {
             console.log('No preset available for model ' + nimModel + ', using raw messages');
         }
 
-        var enhancedMessages = getEnhancedMessages(nimModel, processedMessages);
+        var useFF5Display = preset === PRESET_FRANKENSTEIN;
+        var allowHtmlUI = useFF5Display && frontend !== 'janitor';
+        var enhancedMessages = getEnhancedMessages(nimModel, processedMessages, allowHtmlUI);
 
         // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
         var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
@@ -517,9 +644,9 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
         }
 
         if (wantsStream) {
-            handleStream(response.data, res);
+            handleStream(response.data, res, frontend, useFF5Display);
         } else {
-            handleNonStream(response.data, model, res);
+            handleNonStream(response.data, model, res, frontend, useFF5Display);
         }
     } catch (error) {
         console.error('Proxy error:', {
@@ -535,7 +662,7 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
     }
 });
 
-function handleStream(inputStream, res) {
+function handleStream(inputStream, res, frontend, useFF5Display) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -544,6 +671,9 @@ function handleStream(inputStream, res) {
     var buffer = '';
     var partialData = '';
     var reasoningActive = false;
+    var displayBuffer = '';
+    var gfxStart = '<!-- GFX_START -->';
+    var gfxEnd = '<!-- GFX_END -->';
 
     function safeWrite(obj) {
         try {
@@ -590,7 +720,36 @@ function handleStream(inputStream, res) {
             return;
         }
 
-        // Removed the strict `.trim() === ''` check here to allow spaces/newlines
+        // Janitor receives Markdown templates and needs no HTML UI transform.
+        if (!useFF5Display || frontend === 'janitor') return true;
+
+        // Hold only complete FF5 GFX blocks. Narrative text continues streaming,
+        // while a status/graphics block is released as soon as its closing marker
+        // arrives and the FF5 display regex has been applied.
+        displayBuffer += delta.content;
+        var emitted = '';
+
+        while (displayBuffer) {
+            var startAt = displayBuffer.indexOf(gfxStart);
+            if (startAt === -1) {
+                var safeLength = Math.max(0, displayBuffer.length - (gfxStart.length - 1));
+                emitted += displayBuffer.slice(0, safeLength);
+                displayBuffer = displayBuffer.slice(safeLength);
+                break;
+            }
+
+            emitted += displayBuffer.slice(0, startAt);
+            displayBuffer = displayBuffer.slice(startAt);
+            var endAt = displayBuffer.indexOf(gfxEnd);
+            if (endAt === -1) break;
+
+            var completeBlock = displayBuffer.slice(0, endAt + gfxEnd.length);
+            emitted += applyFrontendDisplay(completeBlock, frontend, useFF5Display);
+            displayBuffer = displayBuffer.slice(endAt + gfxEnd.length);
+        }
+
+        delta.content = emitted;
+        if (delta.content === '') return;
 
         return true;
     }
@@ -599,7 +758,8 @@ function handleStream(inputStream, res) {
         if (!rawData || rawData.trim() === '') return;
 
         if (rawData.trim() === '[DONE]') {
-            safeWrite('[DONE]');
+            // Delay the terminal event until any buffered FF5 UI block has
+            // been transformed and emitted.
             return;
         }
 
@@ -658,6 +818,13 @@ function handleStream(inputStream, res) {
             processData(buffer.slice(6));
         }
 
+        if (displayBuffer) {
+            safeWrite({
+                choices: [{ delta: { content: applyFrontendDisplay(displayBuffer, frontend, useFF5Display) } }]
+            });
+            displayBuffer = '';
+        }
+
         if (reasoningActive) {
             safeWrite({
                 choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
@@ -680,7 +847,7 @@ function handleStream(inputStream, res) {
     });
 }
 
-function handleNonStream(data, model, res) {
+function handleNonStream(data, model, res, frontend, useFF5Display) {
     try {
         var openaiResponse = {
             id: 'chatcmpl-' + Date.now(),
@@ -689,7 +856,7 @@ function handleNonStream(data, model, res) {
             model: model,
             choices: (data.choices || []).map(function(choice, index) {
                 var rawContent = (choice && choice.message && choice.message.content) || '';
-                var fullContent = cleanStructuredContent(rawContent);
+                var fullContent = applyFrontendDisplay(cleanStructuredContent(rawContent), frontend, useFF5Display);
 
                 if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
                     var rawReasoning = choice.message.reasoning_content;
