@@ -80,9 +80,6 @@ var PROMPT_OVERRIDES = {
 };
 
 function getPresetForModel(nimModelId) {
-    if (isDeepSeekModel(nimModelId)) {
-        return PRESET_FREAKYDEEPY;
-    }
     return PRESET_FRANKENSTEIN;
 }
 
@@ -221,14 +218,14 @@ function findJanitorStateStart(text) {
         /<!--\s*FF5_INTERNAL_STATE\b/i,
         /<internal_states\b[^>]*>/i,
         /<details\b[^>]*>\s*<summary\b[^>]*>[^<]*INTERNAL STATES/i,
-        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:🎬\s*)?|🎬\s*)INTERNAL STATES\b/i,
-        /(?:^|\n)\s*\*{1,2}(?:🎬\s*)?INTERNAL STATES\*{1,2}/i,
-        /(?:^|\n)\s*INTERNAL STATES(?:\s*[—:|-]|\s*$)/,
+        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:ðŸŽ¬\s*)?|ðŸŽ¬\s*)INTERNAL STATES\b/i,
+        /(?:^|\n)\s*\*{1,2}(?:ðŸŽ¬\s*)?INTERNAL STATES\*{1,2}/i,
+        /(?:^|\n)\s*INTERNAL STATES(?:\s*[â€”:|-]|\s*$)/,
         /(?:^|\n)\s*\[INTERNAL STATES\]\s*/i,
-        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:👤\s*)?|👤\s*)NPC AGENDAS\b/i,
-        /(?:^|\n)\s*NPC AGENDAS(?:\s*[—:|-]|\s*$)/,
+        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:ðŸ‘¤\s*)?|ðŸ‘¤\s*)NPC AGENDAS\b/i,
+        /(?:^|\n)\s*NPC AGENDAS(?:\s*[â€”:|-]|\s*$)/,
         /(?:^|\n)\s*\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|PHYSICS, ENGINE & WORLD)\]\s*/i,
-        /(?:^|\n)\s*#{1,6}\s+(?:[👤📍🏳️📜💚🔫🧠📓🎲🌌]\s*)?(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|BONDS|CHEKHOV(?:'S GUN)?|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|PHYSICS, ENGINE & WORLD)\b/i
+        /(?:^|\n)\s*#{1,6}\s+(?:[ðŸ‘¤ðŸ“ðŸ³ï¸ðŸ“œðŸ’šðŸ”«ðŸ§ ðŸ““ðŸŽ²ðŸŒŒ]\s*)?(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|BONDS|CHEKHOV(?:'S GUN)?|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|PHYSICS, ENGINE & WORLD)\b/i
     ];
 
     patterns.forEach(function(pattern) {
@@ -414,7 +411,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         var lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only — no JSON.]'
+                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only â€” no JSON.]'
             });
         }
     }
@@ -586,18 +583,12 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
         }
 
-        var preset;
-        if (preset_override && (preset_override === 'frankenstein' || preset_override === 'frankimstein' || preset_override === 'freakydeepy')) {
-            if (preset_override === 'frankimstein') {
-                preset = PRESET_FRANKIMSTEIN;
-            } else if (preset_override === 'freakydeepy') {
-                preset = PRESET_FREAKYDEEPY;
-            } else {
-                preset = PRESET_FRANKENSTEIN;
-            }
-            console.log('Preset override: ' + preset_override + ' (forced by client)');
-        } else {
-            preset = getPresetForModel(nimModel);
+        // Frankenstein is now the universal preset for every model. Ignore
+        // legacy client overrides so no frontend can silently select an older
+        // model-specific preset.
+        var preset = getPresetForModel(nimModel);
+        if (preset_override && preset_override !== 'frankenstein') {
+            console.log('Preset override ignored: ' + preset_override + ' (universal Frankenstein routing is active)');
         }
 
         var frontend = detectFrontend(req);
@@ -667,7 +658,7 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
 
             } else if (nimModel.indexOf('glm') !== -1) {
                 // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
-                // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
+                // not a real NIM API key â€” sending it as-is causes a 400). clear_thinking removed
                 // as it caused a 400 on NIM for GLM 5.1; not re-added for 5.2 since that hasn't been
                 // verified against NIM's endpoint specifically (other providers document it as valid
                 // for preserved multi-turn thinking, but NIM's behavior may differ).
@@ -676,11 +667,11 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
                 };
 
             } else if (nimModel.indexOf('deepseek') !== -1) {
-                // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
+                // DeepSeek: thinking OFF by default â€” enabling it causes extreme latency/timeouts.
                 // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
                 // chat_template_kwargs must be at ROOT payload level, not inside extra_body
                 // (extra_body is an OpenAI-SDK-only abstraction; this server posts raw JSON via axios,
-                // so a literal extra_body key is sent as-is and NIM will not merge it — same class of
+                // so a literal extra_body key is sent as-is and NIM will not merge it â€” same class of
                 // bug that caused the GLM 400s).
                 var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
                 nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
