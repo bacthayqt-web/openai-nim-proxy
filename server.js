@@ -177,8 +177,6 @@ function prepareFF5History(messages) {
         return script.promptOnly && !script.markdownOnly;
     });
 
-    var hiddenJanitorState = /<!--\s*FF5_INTERNAL_STATE\b[\s\S]*?END_FF5_INTERNAL_STATE\s*-->/g;
-
     return messages.map(function(message, index) {
         if (!message || typeof message.content !== 'string' || message.role !== 'assistant') {
             return message;
@@ -192,25 +190,21 @@ function prepareFF5History(messages) {
         });
 
         var cleanedContent = runRegexScripts(message.content, applicable);
-
-        // Janitor renders the newest FF5 state as a hidden HTML comment. Keep
-        // that newest state available to the model, but remove older copies so
-        // invisible bookkeeping cannot grow without bound in the prompt.
-        if (depth >= 2) {
-            cleanedContent = cleanedContent.replace(hiddenJanitorState, '');
-        }
+        // The lean profile never consumes legacy state. Remove it from every
+        // historical assistant message, including the newest one, so it cannot
+        // continue inflating input tokens after the migration.
+        cleanedContent = stripInternalStateOutput(cleanedContent);
 
         return Object.assign({}, message, { content: cleanedContent });
     });
 }
 
-var JANITOR_STATE_BEGIN = '[[FF5_INTERNAL_STATE_BEGIN]]';
-var JANITOR_STATE_END = '[[FF5_INTERNAL_STATE_END]]';
+var INTERNAL_STATE_BEGIN = '[[FF5_INTERNAL_STATE_BEGIN]]';
 
-function findJanitorStateStart(text) {
+function findInternalStateStart(text) {
     var input = String(text || '');
     var candidates = [];
-    var exactIndex = input.indexOf(JANITOR_STATE_BEGIN);
+    var exactIndex = input.indexOf(INTERNAL_STATE_BEGIN);
     if (exactIndex !== -1) candidates.push(exactIndex);
 
     var patterns = [
@@ -218,14 +212,14 @@ function findJanitorStateStart(text) {
         /<!--\s*FF5_INTERNAL_STATE\b/i,
         /<internal_states\b[^>]*>/i,
         /<details\b[^>]*>\s*<summary\b[^>]*>[^<]*INTERNAL STATES/i,
-        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:ðŸŽ¬\s*)?|ðŸŽ¬\s*)INTERNAL STATES\b/i,
-        /(?:^|\n)\s*\*{1,2}(?:ðŸŽ¬\s*)?INTERNAL STATES\*{1,2}/i,
-        /(?:^|\n)\s*INTERNAL STATES(?:\s*[â€”:|-]|\s*$)/,
+        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:🎬\s*)?|🎬\s*)INTERNAL STATES\b/i,
+        /(?:^|\n)\s*\*{1,2}(?:🎬\s*)?INTERNAL STATES\*{1,2}/i,
+        /(?:^|\n)\s*INTERNAL STATES(?:\s*[—:|-]|\s*$)/,
         /(?:^|\n)\s*\[INTERNAL STATES\]\s*/i,
-        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:ðŸ‘¤\s*)?|ðŸ‘¤\s*)NPC AGENDAS\b/i,
-        /(?:^|\n)\s*NPC AGENDAS(?:\s*[â€”:|-]|\s*$)/,
+        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:👤\s*)?|👤\s*)NPC AGENDAS\b/i,
+        /(?:^|\n)\s*NPC AGENDAS(?:\s*[—:|-]|\s*$)/,
         /(?:^|\n)\s*\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|PHYSICS, ENGINE & WORLD)\]\s*/i,
-        /(?:^|\n)\s*#{1,6}\s+(?:[ðŸ‘¤ðŸ“ðŸ³ï¸ðŸ“œðŸ’šðŸ”«ðŸ§ ðŸ““ðŸŽ²ðŸŒŒ]\s*)?(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|BONDS|CHEKHOV(?:'S GUN)?|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|PHYSICS, ENGINE & WORLD)\b/i
+        /(?:^|\n)\s*#{1,6}\s+(?:[👤📍🏳️📜💚🔫🧠📓🎲🌌]\s*)?(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|BONDS|CHEKHOV(?:'S GUN)?|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|PHYSICS, ENGINE & WORLD)\b/i
     ];
 
     patterns.forEach(function(pattern) {
@@ -242,59 +236,25 @@ function findJanitorStateStart(text) {
     return Math.min.apply(Math, candidates);
 }
 
-function extractJanitorStateBody(stateText) {
-    var body = String(stateText || '');
-
-    body = body.replace(/^\s*```(?:html|markdown|text)?\s*/i, '');
-    body = body.replace(/^\s*\[\[FF5_INTERNAL_STATE_BEGIN\]\]\s*/i, '');
-    body = body.replace(/^\s*<!--\s*FF5_INTERNAL_STATE\b\s*/i, '');
-    body = body.replace(/^\s*<!--\s*GFX_START\s*-->\s*/i, '');
-    body = body.replace(/^\s*<internal_states\b[^>]*>\s*/i, '');
-
-    var endCandidates = [];
-    [
-        body.indexOf(JANITOR_STATE_END),
-        body.search(/END_FF5_INTERNAL_STATE\s*-->/i),
-        body.search(/<\/internal_states\s*>/i),
-        body.search(/<!--\s*GFX_END\s*-->/i)
-    ].forEach(function(index) {
-        if (index >= 0) endCandidates.push(index);
-    });
-    if (endCandidates.length > 0) {
-        body = body.slice(0, Math.min.apply(Math, endCandidates));
-    }
-
-    body = body.replace(/\s*```\s*$/i, '');
-    // Consecutive hyphens are invalid inside HTML comments and can make a
-    // renderer expose part of the supposedly hidden state.
-    body = body.replace(/--+/g, '- -');
-    return body.trim();
-}
-
-function hideJanitorInternalState(text) {
+function stripInternalStateOutput(text) {
     var input = String(text || '');
-    var startAt = findJanitorStateStart(input);
+    var startAt = findInternalStateStart(input);
     if (startAt === -1) return input;
 
-    var narrative = input.slice(0, startAt)
+    return input.slice(0, startAt)
         .replace(/\s*```\s*$/i, '')
         .replace(/\s*\n\s*---\s*$/i, '')
         .trimEnd();
-    var stateBody = extractJanitorStateBody(input.slice(startAt));
-    if (!stateBody) return narrative;
-
-    return narrative + (narrative ? '\n\n' : '') +
-        '<!-- FF5_INTERNAL_STATE\n' + stateBody +
-        '\nEND_FF5_INTERNAL_STATE -->';
 }
 
 function applyFrontendDisplay(text, frontend, enabled) {
     if (!enabled) return text;
-    if (frontend === 'janitor') return hideJanitorInternalState(text);
+    var withoutState = stripInternalStateOutput(text);
+    if (frontend === 'janitor') return withoutState;
     var displayScripts = FF5_REGEX.filter(function(script) {
         return !script.promptOnly;
     });
-    return runRegexScripts(text, displayScripts);
+    return runRegexScripts(withoutState, displayScripts);
 }
 
 // FIX 1: Merge System Messages in Presets safely
@@ -375,8 +335,8 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         role: 'system',
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
-                ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences.'
-                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative. Never output raw HTML, CSS, details/summary tags, GFX wrapper comments, or a visible status panel. At the absolute end, emit the Internal States machine block using the exact [[FF5_INTERNAL_STATE_BEGIN]] and [[FF5_INTERNAL_STATE_END]] sentinels required by its template. The proxy will hide that block deterministically. Do not put it in a code fence or explain it.')
+                ? '\n\nFF5 UI EXCEPTION: Pop-in Graphics may use the raw inline HTML required by their own template. Do not put that HTML inside Markdown code fences. Never output an Internal States block, status panel, tracker, notebook, state marker, or hidden metadata.'
+                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative and Pop-in Graphics. Never output raw HTML, CSS, details/summary tags, GFX wrapper comments, a status panel, state markers, hidden comments, trackers, notebooks, or hidden metadata. The proxy removes any accidental Internal States tail.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -411,7 +371,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         var lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only â€” no JSON.]'
+                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only — no JSON.]'
             });
         }
     }
@@ -596,22 +556,6 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
 
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
-            if (preset === PRESET_FRANKENSTEIN && frontend === 'janitor') {
-                var latestAssistantMessage = null;
-                for (var historyIndex = messages.length - 1; historyIndex >= 0; historyIndex--) {
-                    if (messages[historyIndex] && messages[historyIndex].role === 'assistant') {
-                        latestAssistantMessage = messages[historyIndex];
-                        break;
-                    }
-                }
-                var hiddenStateRestored = !!(
-                    latestAssistantMessage &&
-                    typeof latestAssistantMessage.content === 'string' &&
-                    latestAssistantMessage.content.indexOf('<!-- FF5_INTERNAL_STATE') !== -1
-                );
-                console.log('Janitor hidden Internal State restored from history: ' +
-                    (hiddenStateRestored ? 'YES' : 'NO (normal on first turn)'));
-            }
             var sourceMessages = preset === PRESET_FRANKENSTEIN ? prepareFF5History(messages) : messages;
             processedMessages = buildOrderedMessagesFromPreset(preset, sourceMessages, promptOverrides);
             console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');
@@ -658,7 +602,7 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
 
             } else if (nimModel.indexOf('glm') !== -1) {
                 // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
-                // not a real NIM API key â€” sending it as-is causes a 400). clear_thinking removed
+                // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
                 // as it caused a 400 on NIM for GLM 5.1; not re-added for 5.2 since that hasn't been
                 // verified against NIM's endpoint specifically (other providers document it as valid
                 // for preserved multi-turn thinking, but NIM's behavior may differ).
@@ -667,11 +611,11 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
                 };
 
             } else if (nimModel.indexOf('deepseek') !== -1) {
-                // DeepSeek: thinking OFF by default â€” enabling it causes extreme latency/timeouts.
+                // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
                 // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
                 // chat_template_kwargs must be at ROOT payload level, not inside extra_body
                 // (extra_body is an OpenAI-SDK-only abstraction; this server posts raw JSON via axios,
-                // so a literal extra_body key is sent as-is and NIM will not merge it â€” same class of
+                // so a literal extra_body key is sent as-is and NIM will not merge it — same class of
                 // bug that caused the GLM 400s).
                 var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
                 nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
@@ -777,9 +721,9 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var displayBuffer = '';
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
-    var janitorBuffer = '';
-    var janitorStateStarted = false;
-    var janitorTailReserve = 320;
+    var stateTailBuffer = '';
+    var stateOutputStarted = false;
+    var stateTailReserve = 320;
 
     function safeWrite(obj) {
         try {
@@ -790,24 +734,24 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
         }
     }
 
-    function processJanitorContent(content) {
-        janitorBuffer += content;
+    function removeStateFromStream(content) {
+        stateTailBuffer += content;
 
-        if (janitorStateStarted) return '';
+        if (stateOutputStarted) return '';
 
-        var stateStart = findJanitorStateStart(janitorBuffer);
+        var stateStart = findInternalStateStart(stateTailBuffer);
         if (stateStart !== -1) {
-            var visible = janitorBuffer.slice(0, stateStart)
+            var visible = stateTailBuffer.slice(0, stateStart)
                 .replace(/\s*```\s*$/i, '')
                 .replace(/\s*\n\s*---\s*$/i, '');
-            janitorBuffer = janitorBuffer.slice(stateStart);
-            janitorStateStarted = true;
+            stateTailBuffer = stateTailBuffer.slice(stateStart);
+            stateOutputStarted = true;
             return visible;
         }
 
-        var safeLength = Math.max(0, janitorBuffer.length - janitorTailReserve);
-        var visibleChunk = janitorBuffer.slice(0, safeLength);
-        janitorBuffer = janitorBuffer.slice(safeLength);
+        var safeLength = Math.max(0, stateTailBuffer.length - stateTailReserve);
+        var visibleChunk = stateTailBuffer.slice(0, safeLength);
+        stateTailBuffer = stateTailBuffer.slice(safeLength);
         return visibleChunk;
     }
 
@@ -847,10 +791,11 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             return;
         }
 
-        if (useFF5Display && frontend === 'janitor' && !(SHOW_REASONING && reasoningActive)) {
-            delta.content = processJanitorContent(delta.content);
+        // Internal States are disabled, but filter every frontend defensively
+        // in case a model imitates an older response or ignores the lean preset.
+        if (useFF5Display && !(SHOW_REASONING && reasoningActive)) {
+            delta.content = removeStateFromStream(delta.content);
             if (delta.content === '') return;
-            return true;
         }
 
         if (!useFF5Display || frontend === 'janitor') return true;
@@ -950,19 +895,26 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             processData(buffer.slice(6));
         }
 
-        if (displayBuffer) {
-            safeWrite({
-                choices: [{ delta: { content: applyFrontendDisplay(displayBuffer, frontend, useFF5Display) } }]
-            });
-            displayBuffer = '';
+        var finalVisibleTail = '';
+        if (useFF5Display && stateTailBuffer) {
+            if (!stateOutputStarted) {
+                finalVisibleTail = stripInternalStateOutput(stateTailBuffer);
+            }
+            stateTailBuffer = '';
         }
 
-        if (useFF5Display && frontend === 'janitor' && janitorBuffer) {
-            var finalJanitorContent = hideJanitorInternalState(janitorBuffer);
-            if (finalJanitorContent) {
-                safeWrite({ choices: [{ delta: { content: finalJanitorContent } }] });
+        if (frontend === 'janitor') {
+            if (finalVisibleTail) {
+                safeWrite({ choices: [{ delta: { content: finalVisibleTail } }] });
             }
-            janitorBuffer = '';
+        } else {
+            displayBuffer += finalVisibleTail;
+            if (displayBuffer) {
+                safeWrite({
+                    choices: [{ delta: { content: applyFrontendDisplay(displayBuffer, frontend, useFF5Display) } }]
+                });
+                displayBuffer = '';
+            }
         }
 
         if (reasoningActive) {
