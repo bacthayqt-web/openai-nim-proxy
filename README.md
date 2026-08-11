@@ -38,11 +38,13 @@ Use the Janitor-specific route in Janitor AI:
 https://YOUR-PROXY/janitor/v1/chat/completions
 ```
 
-That route converts Pop-in Graphics to portable Markdown and stores Internal
-States in a hidden `FF5_INTERNAL_STATE` HTML comment at the end of each raw
-response. The latest hidden state remains available to the model on the next
-turn, while older copies are removed from prompt context to control token use.
-All narrative and simulation prompts remain the same.
+That route converts Pop-in Graphics to portable Markdown. GLM emits Internal
+States between dedicated machine sentinels; the proxy buffers only that state
+tail, normalizes common malformed or visible variants, and sends Janitor one
+valid hidden `FF5_INTERNAL_STATE` HTML comment. The visible narrative continues
+to stream normally. The latest hidden state remains available to the model on
+the next turn, while older copies are removed from prompt context to control
+token use. All narrative and simulation prompts remain the same.
 
 ## Environment
 
