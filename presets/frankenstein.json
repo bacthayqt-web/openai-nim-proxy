@@ -34,7 +34,6 @@
     "019f62e8-892f-7016-a021-aa24f58271d6",
     "019f62e8-892f-7014-9d71-8bedfe4ac3ef",
     "019f62e8-892f-7013-9e9b-13eae330f5a0",
-    "019f62e8-892f-7019-be65-715a4949cba0",
     "019f62e8-892f-701a-afd5-49222c79fdb6",
     "019f62e8-892f-701b-bab1-563021fd8b14",
     "019f62e8-892f-701d-8f83-6d62af427132",
@@ -119,12 +118,6 @@
       "name": "🚫Banned Word List📝",
       "role": "system",
       "content": "{{// banned words list. Prevents the ai from using them. You can add or delete words to the list as you wish.}}{{trim}}\n\n<banned_vocabulary>\nALL these words / phrases are STRICTLY prohibited in ALL responses: [fresh meat, spine, breath hitching, breath catching, husky, catching in throat, pupils blown wide, predatory, ozone, meat, asset, shivers down spine, pupils dilated, nails biting, velvet, vise, vice, structural integrity, deep curve, furnace, throaty, calloused, guttural, slick, unadulterated, jaw clenched, barely above a whisper, musk, breast, a beat] \n\nYou must select a replacement word.\n</banned_vocabulary>"
-    },
-    {
-      "identifier": "019f62e8-892f-7019-be65-715a4949cba0",
-      "name": "🌈 Colored Dialogue VN🖍️",
-      "role": "system",
-      "content": "{{// This is a strictly optional toggle which turns NPC spoken dialogue to a color. I should note many frontends have this as an option within settings. If you use these options on your frontend simply turn off this toggle to avoid conflicts.}}{{trim}}\n\n<colored_dialogue>\nFormat spoken dialogue exactly as: <font color=\"#HEX\">\"Dialogue\"</font>\n- Palette: #56B4E9, #E69F00, #009E73, #CC79A7, #D55E00, #F0E442, #B39DDB, #80CBC4, #FFAB91, #B0BEC5\n- Rules: Assign each NPC one unique hex color from the palette; lock this color permanently for the entire chat. Color spoken dialogue only. Keep narration uncolored.\n</colored_dialogue>"
     },
     {
       "identifier": "019f62e8-892f-701a-afd5-49222c79fdb6",
