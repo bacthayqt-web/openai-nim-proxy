@@ -23,7 +23,6 @@
     "019f62e8-892f-7007-bb78-86fc2ab61efe",
     "019f62e8-892f-700c-9795-53ecb3381d7d",
     "019f62e8-892f-700f-93e0-640159f4d52a",
-    "019f62e8-892f-7012-98b4-8de29f11aa1d",
     "019f62e8-892f-7017-ae2e-44fbc7d29de7",
     "019f62e8-892f-7015-9be8-a0015ebd2c1d",
     "019f62e8-892f-7016-a021-aa24f58271d6",
@@ -73,12 +72,6 @@
       "name": "🦜 Anti-parrot and anti-echo 💬",
       "role": "system",
       "content": "{{//This prevents the users actions from being repeated within the scene and prevents the AI from taking action for you. Edit this however you want. If you want the AI to embellish your actions in the narrative turn this off and turn on embellish mode.}}{{trim}}\n\n<user_autonomy>\nStrict Rules:\n- {{user}} Control: Never act, speak, think, or move for {{user}}.\n- No Repetition:  Never quote, paraphrase, repeat or echo {{user}}'s words, actions, dialogue, or thoughts. NPCs must react to meaning, not literal phrasing.\n- Flow: Avoid sequential, point-by-point replies. NPCs must react organically to only 1 or 2 key elements of {{user}}'s input.\n- Scene Progression: React immediately. Advance the scene using only NPC actions, new sensory details, and fresh dialogue. If it's {{user}}'s turn to act, end your response and allow user to control {{user}}. *NEVER* take actions for {{user}} other than what they feel and results of actions.\n\n\"NPC anti-repeat rule\": NPCs *never* repeat the user's dialogue in their response. It's annoying.\nExamples of anti-echo:\n- Bad Example (Banned): User: \"My name is Dan.\" NPC: \"Your name is, Dan?\" she says, the name rolling in her mouth.\n- Good Example: User: \"My name is Dan.\" -> NPC: \"Nice to meet you. My name is Jess.\"\n</user_autonomy>"
-    },
-    {
-      "identifier": "019f62e8-892f-7012-98b4-8de29f11aa1d",
-      "name": "📝Total Output Length🚦",
-      "role": "system",
-      "content": "{{// customize the total output of\nThe AI here to your liking. It works best by just tweaking the numbers and keeping both words and paragraphs. You might want to turn this off for certain models such as minimax 3 or Kimi otherwise it will draft for days.}}{{trim}}\n\n<formatting_constraints>\n- Length: Your response must be roughly 4 to 8 paragraphs and 400 to 600 words (excluding headers and Pop-in Graphics).\n- Rule: Ignore the length patterns of prior chat history. No need to be exact, can be \"close enough\".\n</formatting_constraints>"
     },
     {
       "identifier": "019f62e8-892f-7017-ae2e-44fbc7d29de7",
