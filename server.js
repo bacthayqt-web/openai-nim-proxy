@@ -142,6 +142,50 @@ function expandPresetMacros(input, variables) {
             return full;
         });
 
+        // A setvar value may intentionally contain an ordinary frontend macro
+        // such as {{user}}. The innermost-macro pass must preserve that macro,
+        // but doing so also leaves its enclosing setvar unexpanded. Parse one
+        // balanced setvar here so the template is stored without consuming the
+        // ordinary card macro inside it.
+        var setvarStart = text.indexOf('{{setvar::');
+        if (setvarStart !== -1) {
+            var macroDepth = 1;
+            var macroCursor = setvarStart + 2;
+            var setvarEnd = -1;
+            while (macroCursor < text.length - 1) {
+                var bracePair = text.slice(macroCursor, macroCursor + 2);
+                if (bracePair === '{{') {
+                    macroDepth += 1;
+                    macroCursor += 2;
+                    continue;
+                }
+                if (bracePair === '}}') {
+                    macroDepth -= 1;
+                    macroCursor += 2;
+                    if (macroDepth === 0) {
+                        setvarEnd = macroCursor;
+                        break;
+                    }
+                    continue;
+                }
+                macroCursor += 1;
+            }
+
+            if (setvarEnd !== -1) {
+                var setvarBody = text.slice(setvarStart + 2, setvarEnd - 2);
+                var setvarPrefix = 'setvar::';
+                var setvarRest = setvarBody.slice(setvarPrefix.length);
+                var setvarSeparator = setvarRest.indexOf('::');
+                if (setvarBody.indexOf(setvarPrefix) === 0 && setvarSeparator !== -1) {
+                    var setvarName = setvarRest.slice(0, setvarSeparator);
+                    var setvarValue = setvarRest.slice(setvarSeparator + 2);
+                    vars[setvarName] = setvarValue;
+                    text = text.slice(0, setvarStart) + text.slice(setvarEnd);
+                    changed = true;
+                }
+            }
+        }
+
         if (!changed) break;
     }
 
@@ -177,6 +221,8 @@ function prepareFF5History(messages) {
         return script.promptOnly && !script.markdownOnly;
     });
 
+    var hiddenJanitorState = /<!--\s*FF5_INTERNAL_STATE\b[\s\S]*?END_FF5_INTERNAL_STATE\s*-->/g;
+
     return messages.map(function(message, index) {
         if (!message || typeof message.content !== 'string' || message.role !== 'assistant') {
             return message;
@@ -190,71 +236,23 @@ function prepareFF5History(messages) {
         });
 
         var cleanedContent = runRegexScripts(message.content, applicable);
-        // The lean profile never consumes legacy state. Remove it from every
-        // historical assistant message, including the newest one, so it cannot
-        // continue inflating input tokens after the migration.
-        cleanedContent = stripInternalStateOutput(cleanedContent);
+        // The FF5 regex suite removes generic state blocks at depth >= 2. The
+        // Janitor representation is a hidden comment, so remove old copies
+        // explicitly while retaining the newest state for the next turn.
+        if (depth >= 2) {
+            cleanedContent = cleanedContent.replace(hiddenJanitorState, '');
+        }
 
         return Object.assign({}, message, { content: cleanedContent });
     });
 }
 
-var INTERNAL_STATE_BEGIN = '[[FF5_INTERNAL_STATE_BEGIN]]';
-
-function findInternalStateStart(text) {
-    var input = String(text || '');
-    var candidates = [];
-    var exactIndex = input.indexOf(INTERNAL_STATE_BEGIN);
-    if (exactIndex !== -1) candidates.push(exactIndex);
-
-    var patterns = [
-        /<!--\s*GFX_START\s*-->\s*<internal_states\b[^>]*>/i,
-        /<!--\s*FF5_INTERNAL_STATE\b/i,
-        /<internal_states\b[^>]*>/i,
-        /<details\b[^>]*>\s*<summary\b[^>]*>[^<]*INTERNAL STATES/i,
-        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:🎬\s*)?|🎬\s*)INTERNAL STATES\b/i,
-        /(?:^|\n)\s*\*{1,2}(?:🎬\s*)?INTERNAL STATES\*{1,2}/i,
-        /(?:^|\n)\s*INTERNAL STATES(?:\s*[—:|-]|\s*$)/,
-        /(?:^|\n)\s*\[INTERNAL STATES\]\s*/i,
-        /(?:^|\n)\s*(?:(?:#{1,6}\s+)(?:👤\s*)?|👤\s*)NPC AGENDAS\b/i,
-        /(?:^|\n)\s*NPC AGENDAS(?:\s*[—:|-]|\s*$)/,
-        /(?:^|\n)\s*\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|PHYSICS, ENGINE & WORLD)\]\s*/i,
-        /(?:^|\n)\s*#{1,6}\s+(?:[👤📍🏳️📜💚🔫🧠📓🎲🌌]\s*)?(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|QUESTS|BONDS|CHEKHOV(?:'S GUN)?|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|PHYSICS, ENGINE & WORLD)\b/i
-    ];
-
-    patterns.forEach(function(pattern) {
-        var match = pattern.exec(input);
-        if (match) {
-            var offset = match.index;
-            // Do not include the preceding newline in the hidden block.
-            if (input.charAt(offset) === '\n') offset += 1;
-            candidates.push(offset);
-        }
-    });
-
-    if (candidates.length === 0) return -1;
-    return Math.min.apply(Math, candidates);
-}
-
-function stripInternalStateOutput(text) {
-    var input = String(text || '');
-    var startAt = findInternalStateStart(input);
-    if (startAt === -1) return input;
-
-    return input.slice(0, startAt)
-        .replace(/\s*```\s*$/i, '')
-        .replace(/\s*\n\s*---\s*$/i, '')
-        .trimEnd();
-}
-
 function applyFrontendDisplay(text, frontend, enabled) {
-    if (!enabled) return text;
-    var withoutState = stripInternalStateOutput(text);
-    if (frontend === 'janitor') return withoutState;
+    if (!enabled || frontend === 'janitor') return text;
     var displayScripts = FF5_REGEX.filter(function(script) {
         return !script.promptOnly;
     });
-    return runRegexScripts(withoutState, displayScripts);
+    return runRegexScripts(text, displayScripts);
 }
 
 // FIX 1: Merge System Messages in Presets safely
@@ -335,8 +333,8 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         role: 'system',
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
-                ? '\n\nFF5 UI EXCEPTION: Pop-in Graphics may use the raw inline HTML required by their own template. Do not put that HTML inside Markdown code fences. Never output an Internal States block, status panel, tracker, notebook, state marker, or hidden metadata.'
-                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative and Pop-in Graphics. Never output raw HTML, CSS, details/summary tags, GFX wrapper comments, a status panel, state markers, hidden comments, trackers, notebooks, or hidden metadata. The proxy removes any accidental Internal States tail.')
+                ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences.'
+                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative and Pop-in Graphics. Never output visible raw HTML, CSS, details/summary tags, or GFX wrapper comments. The sole exception is the required hidden <!-- FF5_INTERNAL_STATE ... END_FF5_INTERNAL_STATE --> comment at the absolute end of the response. Emit that comment exactly as instructed, outside code fences; do not display or explain it.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -556,6 +554,22 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
 
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
+            if (preset === PRESET_FRANKENSTEIN && frontend === 'janitor') {
+                var latestAssistantMessage = null;
+                for (var historyIndex = messages.length - 1; historyIndex >= 0; historyIndex--) {
+                    if (messages[historyIndex] && messages[historyIndex].role === 'assistant') {
+                        latestAssistantMessage = messages[historyIndex];
+                        break;
+                    }
+                }
+                var hiddenStateRestored = !!(
+                    latestAssistantMessage &&
+                    typeof latestAssistantMessage.content === 'string' &&
+                    latestAssistantMessage.content.indexOf('<!-- FF5_INTERNAL_STATE') !== -1
+                );
+                console.log('Janitor hidden Internal State restored from history: ' +
+                    (hiddenStateRestored ? 'YES' : 'NO (normal on first turn)'));
+            }
             var sourceMessages = preset === PRESET_FRANKENSTEIN ? prepareFF5History(messages) : messages;
             processedMessages = buildOrderedMessagesFromPreset(preset, sourceMessages, promptOverrides);
             console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');
@@ -721,9 +735,6 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var displayBuffer = '';
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
-    var stateTailBuffer = '';
-    var stateOutputStarted = false;
-    var stateTailReserve = 320;
 
     function safeWrite(obj) {
         try {
@@ -732,27 +743,6 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
         } catch (e) {
             console.error('Stream write error:', e.message);
         }
-    }
-
-    function removeStateFromStream(content) {
-        stateTailBuffer += content;
-
-        if (stateOutputStarted) return '';
-
-        var stateStart = findInternalStateStart(stateTailBuffer);
-        if (stateStart !== -1) {
-            var visible = stateTailBuffer.slice(0, stateStart)
-                .replace(/\s*```\s*$/i, '')
-                .replace(/\s*\n\s*---\s*$/i, '');
-            stateTailBuffer = stateTailBuffer.slice(stateStart);
-            stateOutputStarted = true;
-            return visible;
-        }
-
-        var safeLength = Math.max(0, stateTailBuffer.length - stateTailReserve);
-        var visibleChunk = stateTailBuffer.slice(0, safeLength);
-        stateTailBuffer = stateTailBuffer.slice(safeLength);
-        return visibleChunk;
     }
 
     function processDelta(delta) {
@@ -791,13 +781,8 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             return;
         }
 
-        // Internal States are disabled, but filter every frontend defensively
-        // in case a model imitates an older response or ignores the lean preset.
-        if (useFF5Display && !(SHOW_REASONING && reasoningActive)) {
-            delta.content = removeStateFromStream(delta.content);
-            if (delta.content === '') return;
-        }
-
+        // Janitor receives Markdown templates and a hidden state comment, so
+        // it needs no HTML UI transform.
         if (!useFF5Display || frontend === 'janitor') return true;
 
         // Hold only complete FF5 GFX blocks. Narrative text continues streaming,
@@ -895,26 +880,11 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             processData(buffer.slice(6));
         }
 
-        var finalVisibleTail = '';
-        if (useFF5Display && stateTailBuffer) {
-            if (!stateOutputStarted) {
-                finalVisibleTail = stripInternalStateOutput(stateTailBuffer);
-            }
-            stateTailBuffer = '';
-        }
-
-        if (frontend === 'janitor') {
-            if (finalVisibleTail) {
-                safeWrite({ choices: [{ delta: { content: finalVisibleTail } }] });
-            }
-        } else {
-            displayBuffer += finalVisibleTail;
-            if (displayBuffer) {
-                safeWrite({
-                    choices: [{ delta: { content: applyFrontendDisplay(displayBuffer, frontend, useFF5Display) } }]
-                });
-                displayBuffer = '';
-            }
+        if (displayBuffer) {
+            safeWrite({
+                choices: [{ delta: { content: applyFrontendDisplay(displayBuffer, frontend, useFF5Display) } }]
+            });
+            displayBuffer = '';
         }
 
         if (reasoningActive) {

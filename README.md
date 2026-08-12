@@ -3,10 +3,10 @@
 This proxy routes OpenAI-style chat completion requests to NVIDIA NIM and
 injects model-specific roleplay presets.
 
-## Frankenstein 5 profile
+## Frankenstein 5.2 profile
 
-`presets/frankenstein.json` is compiled from **Freaky Frankenstein 5 - Internal
-States - Fast** using its default switches with these choices:
+`presets/frankenstein.json` is compiled from **FF5.2 Internal States Forced
+Reasoning hapuppy** and uses **FF5 Regex Suite 2.4** with these choices:
 
 - Cinematic Realism
 - Third-person POV (replaces FF5's default Hybrid POV)
@@ -19,7 +19,9 @@ States - Fast** using its default switches with these choices:
 
 The proxy expands FF5's SillyTavern `setvar`, `getvar`, `trim`, and `roll::1d20`
 macros before sending the request to NVIDIA. Older Internal State blocks are
-removed from model context while the newest block is retained.
+removed from model context after two turns while the newest block is retained.
+Every exposed model routes through this Frankenstein profile; legacy preset
+overrides are ignored.
 
 ## Frontend URLs
 
