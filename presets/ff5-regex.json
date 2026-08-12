@@ -1,101 +1,30 @@
 [
   {
-    "id": "06e01492-05c4-4536-9d54-3348f96c64ac",
-    "scriptName": "FF5 UI - Collapse Detail Spacing",
-    "findRegex": "/<\\/details>[\\r\\n]+\\s*<details/g",
-    "replaceString": "</details><details",
-    "trimStrings": [],
-    "placement": [2],
-    "disabled": false,
-    "markdownOnly": true,
-    "promptOnly": false,
-    "runOnEdit": false,
-    "substituteRegex": 0,
-    "minDepth": null,
-    "maxDepth": null
-  },
-  {
-    "id": "b2d94519-0e06-446a-9dfb-160cdb8b8ac2",
-    "scriptName": "FF5 UI - GM Notebook Highlights",
-    "findRegex": "/-\\s*\\[([RTD])\\]/g",
-    "replaceString": "- <b style=\"color:#f9e2af;font-weight:600;text-shadow:0 0 2px rgba(249,226,175,0.2);\">[$1]</b>",
-    "trimStrings": [],
-    "placement": [2],
-    "disabled": false,
-    "markdownOnly": true,
-    "promptOnly": false,
-    "runOnEdit": false,
-    "substituteRegex": 0,
-    "minDepth": null,
-    "maxDepth": null
-  },
-  {
-    "id": "b368c1ec-e617-44a8-a100-e12652c9067c",
-    "scriptName": "FF5 - Relationship Bars (Negative)",
-    "findRegex": "/-?\\s*(?:<b[^>]*>)?\\s*([^<|↔\\n]+?)\\s*(?:<\\/b>)?\\s*↔\\s*(?:<b[^>]*>)?\\s*([^<|\\n]+?)\\s*(?:<\\/b>)?\\s*\\|\\s*(?:BOND|Bond):\\s*(-)(\\d+)\\s*\\|\\s*(?:SPARKS?|Sparks?):\\s*(\\d+)\\s*\\|\\s*(?:GRUDGE|Grudge):\\s*(\\d+)/g",
-    "replaceString": "<div style=\"background:rgba(24,24,37,0.8);border:1px solid #45475a;border-radius:6px;padding:15px;margin-bottom:12px;box-shadow:0 4px 10px rgba(0,0,0,0.3);\"><div style=\"text-align:center;font-size:1.1em;font-weight:bold;color:#cdd6f4;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;\">$1 <span style=\"color:#74c7ec;margin:0 8px;\">⟷</span> $2</div><div style=\"display:flex;flex-direction:column;gap:12px;\"><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f38ba8;text-shadow:1px 1px 2px #000;\">BOND: $3$4</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#eba0ac,#f38ba8);box-shadow:0 0 8px rgba(243,139,168,0.5);width:min(calc($4 * 20%), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f5c2e7;text-shadow:1px 1px 2px #000;\">SPARKS: $5</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#cba6f7,#f5c2e7);box-shadow:0 0 8px rgba(245,194,231,0.5);width:min(calc($5 * 6.66%), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f38ba8;text-shadow:1px 1px 2px #000;\">GRUDGE: $6</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#eba0ac,#f38ba8);box-shadow:0 0 8px rgba(243,139,168,0.5);width:min(calc($6 * 10%), 100%);\"></div></div></div></div></div>",
-    "trimStrings": [],
-    "placement": [2],
-    "disabled": false,
-    "markdownOnly": true,
-    "promptOnly": true,
-    "runOnEdit": false,
-    "substituteRegex": 0,
-    "minDepth": 0,
-    "maxDepth": null
-  },
-  {
-    "id": "56422540-4d4d-4295-b4da-5974e3c95dc6",
-    "scriptName": "FF5 - Relationship Bars (Positive)",
-    "findRegex": "/-?\\s*(?:<b[^>]*>)?\\s*([^<|↔\\n]+?)\\s*(?:<\\/b>)?\\s*↔\\s*(?:<b[^>]*>)?\\s*([^<|\\n]+?)\\s*(?:<\\/b>)?\\s*\\|\\s*(?:BOND|Bond):\\s*(\\+?)(\\d+)\\s*\\|\\s*(?:SPARKS?|Sparks?):\\s*(\\d+)\\s*\\|\\s*(?:GRUDGE|Grudge):\\s*(\\d+)/g",
-    "replaceString": "<div style=\"background:rgba(24,24,37,0.8);border:1px solid #45475a;border-radius:6px;padding:15px;margin-bottom:12px;box-shadow:0 4px 10px rgba(0,0,0,0.3);\"><div style=\"text-align:center;font-size:1.1em;font-weight:bold;color:#cdd6f4;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;\">$1 <span style=\"color:#74c7ec;margin:0 8px;\">⟷</span> $2</div><div style=\"display:flex;flex-direction:column;gap:12px;\"><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#a6e3a1;text-shadow:1px 1px 2px #000;\">BOND: $3$4</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#94e2d5,#a6e3a1);box-shadow:0 0 8px rgba(166,227,161,0.5);width:min(calc($4 * 5%), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f5c2e7;text-shadow:1px 1px 2px #000;\">SPARKS: $5</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#cba6f7,#f5c2e7);box-shadow:0 0 8px rgba(245,194,231,0.5);width:min(calc($5 * 6.66%), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f38ba8;text-shadow:1px 1px 2px #000;\">GRUDGE: $6</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#eba0ac,#f38ba8);box-shadow:0 0 8px rgba(243,139,168,0.5);width:min(calc($6 * 10%), 100%);\"></div></div></div></div></div>",
-    "trimStrings": [],
-    "placement": [2],
-    "disabled": false,
-    "markdownOnly": true,
-    "promptOnly": true,
-    "runOnEdit": false,
-    "substituteRegex": 0,
-    "minDepth": 0,
-    "maxDepth": null
-  },
-  {
-    "id": "7b6f55a5-b6e1-4c50-9efa-4c8f5b297561",
-    "scriptName": "FF5 - Image Prompt Stripper",
-    "findRegex": "/<!--\\s*IMG_PROMPT:[^>]*-->/g",
+    "id": "085ec7a4-1e7c-49fe-8920-d05e2e9b0a2c",
+    "scriptName": "Hapuppy Delete Thoughts",
+    "findRegex": "/###\\s*Internal Monologue\\s*[\\s\\S]*?###\\s*Response\\s*/gi",
     "replaceString": "",
     "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      1
+    ],
     "disabled": false,
     "markdownOnly": false,
     "promptOnly": true,
     "runOnEdit": false,
     "substituteRegex": 0,
-    "minDepth": 0,
+    "minDepth": null,
     "maxDepth": null
   },
   {
-    "id": "3b43078e-0b51-4bc9-aadd-7b366846deb9",
-    "scriptName": "FF5 - GFX Stripper",
-    "findRegex": "/<!-- GFX_START -->\\s*<div[^>]*?>([\\s\\S]*?)<\\/div>\\s*<!-- GFX_END -->/g",
-    "replaceString": "$1",
+    "id": "713f7f77-cec1-42ef-9b1a-f288498c834e",
+    "scriptName": "Hapuppy Hide Thoughts",
+    "findRegex": "/###\\s*Internal Monologue\\s*([\\s\\S]*?)###\\s*Response\\s*/gi",
+    "replaceString": "<details style=\"background: rgba(147, 51, 234, 0.08); border: 1px solid rgba(147, 51, 234, 0.3); border-left: 4px solid #a855f7; border-radius: 8px; margin: 10px 0; padding: 10px 14px; font-size: 0.92em;\"><summary style=\"cursor: pointer; font-weight: bold; color: #c084fc; user-select: none;\">💭 Thoughts</summary>\n\n$1\n</details>",
     "trimStrings": [],
-    "placement": [2],
-    "disabled": false,
-    "markdownOnly": false,
-    "promptOnly": true,
-    "runOnEdit": false,
-    "substituteRegex": 0,
-    "minDepth": 0,
-    "maxDepth": null
-  },
-  {
-    "id": "0e6cf039-9a64-4d29-aee6-3b17c647720c",
-    "scriptName": "FF5 UI - Menu Orange",
-    "findRegex": "/<details>\\s*<summary>([^<]*?)(PLOT MOMENTUM|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)([^<]*?)<\\/summary>((?:(?!<\\/details>)[\\s\\S])*)<\\/details>/g",
-    "replaceString": "<details style=\"background:rgba(250,179,135,0.05);border:1px solid rgba(250,179,135,0.2);border-left:4px solid #fab387;margin:8px 4px;border-radius:4px;\"><summary style=\"background:linear-gradient(90deg, rgba(250,179,135,0.25), transparent);padding:10px 15px;font-weight:bold;color:#fab387;cursor:pointer;text-transform:uppercase;letter-spacing:0.5px;list-style:none;\">$1$2$3</summary><ul>$4</ul></details>",
-    "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      2
+    ],
     "disabled": false,
     "markdownOnly": true,
     "promptOnly": false,
@@ -105,12 +34,99 @@
     "maxDepth": null
   },
   {
-    "id": "16fa76b6-4aa7-4b20-93b4-4a3c77d3e284",
+    "id": "cce1e3a7-713f-4954-b4c5-2d1627c28557",
+    "scriptName": "FF5 UI - Stack Bullets",
+    "findRegex": "/\\n[ \\t]*[-•*][ \\t]*<b>/g",
+    "replaceString": "<br>- <b>",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": null,
+    "maxDepth": null
+  },
+  {
+    "id": "746220a4-3476-4657-8f93-c02496f97897",
+    "scriptName": "FF5 UI - Menu Master",
+    "findRegex": "/<details>\\s*<summary>([^<]*?)(INTERNAL STATES)([^<]*?)<\\/summary>/gi",
+    "replaceString": "<details style=\"background:rgba(20,20,30,0.4);border-radius:6px;margin:2px 0;\"><summary style=\"background:linear-gradient(90deg, #313244, #1e1e2e);padding:10px 12px;font-weight:bold;color:#cdd6f4;cursor:pointer;text-transform:uppercase;letter-spacing:1px;list-style:none;border-bottom:2px solid #89b4fa;border-radius:6px 6px 0 0;\">$1$2$3</summary>",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": null,
+    "maxDepth": null
+  },
+  {
+    "id": "34cfd52d-5842-4f98-8018-9ae5e8ee8e8b",
+    "scriptName": "FF5 UI - Menu Purple",
+    "findRegex": "/<details>\\s*<summary>([^<]*?)(QUESTS|CHEKHOV'S GUN|CHEKHOV SEEDS|INTERNAL THOUGHTS|INV & SKILLS|INVENTORY & STATUS|GM NOTEBOOK|GM'S NOTEBOOK)([^<]*?)<\\/summary>([\\s\\S]*?)<\\/details>/gi",
+    "replaceString": "<details style=\"background:rgba(203,166,247,0.05);border:1px solid rgba(203,166,247,0.2);border-left:4px solid #cba6f7;margin:2px 0;border-radius:4px;\"><summary style=\"background:linear-gradient(90deg, rgba(203,166,247,0.25), transparent);padding:8px 12px;font-weight:bold;color:#cba6f7;cursor:pointer;text-transform:uppercase;letter-spacing:0.5px;list-style:none;\">$1$2$3</summary><div style=\"padding:8px 12px;\">$4</div></details>",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": null,
+    "maxDepth": null
+  },
+  {
+    "id": "6ede7bb7-6a35-4df4-a90b-5ca976568967",
+    "scriptName": "FF5 UI - Menu Teal",
+    "findRegex": "/<details>\\s*<summary>([^<]*?)(NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|BOND TRACKER)([^<]*?)<\\/summary>([\\s\\S]*?)<\\/details>/gi",
+    "replaceString": "<details style=\"background:rgba(148,226,213,0.05);border:1px solid rgba(148,226,213,0.2);border-left:4px solid #94e2d5;margin:2px 0;border-radius:4px;\"><summary style=\"background:linear-gradient(90deg, rgba(148,226,213,0.25), transparent);padding:8px 12px;font-weight:bold;color:#94e2d5;cursor:pointer;text-transform:uppercase;letter-spacing:0.5px;list-style:none;\">$1$2$3</summary><ul style=\"margin:0;padding-left:15px;\">$4</ul></details>",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": null,
+    "maxDepth": null
+  },
+  {
+    "id": "9a0f1244-812b-4cbb-8b8d-3dc820a4c7d4",
+    "scriptName": "FF5 UI - Menu Orange",
+    "findRegex": "/<details>\\s*<summary>([^<]*?)(PLOT MOMENTUM|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)([^<]*?)<\\/summary>([\\s\\S]*?)<\\/details>/gi",
+    "replaceString": "<details style=\"background:rgba(250,179,135,0.05);border:1px solid rgba(250,179,135,0.2);border-left:4px solid #fab387;margin:2px 0;border-radius:4px;\"><summary style=\"background:linear-gradient(90deg, rgba(250,179,135,0.25), transparent);padding:8px 12px;font-weight:bold;color:#fab387;cursor:pointer;text-transform:uppercase;letter-spacing:0.5px;list-style:none;\">$1$2$3</summary><ul style=\"margin:0;padding-left:15px;\">$4</ul></details>",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": null,
+    "maxDepth": null
+  },
+  {
+    "id": "00c86ed3-3bbc-49f8-99ab-c051ddd4d73e",
     "scriptName": "FF5 UI - Highlights",
-    "findRegex": "/-\\s*<b[^>]*?>(.*?)<\\/b>(?!\\s*↔)/g",
+    "findRegex": "/-[ \\t]*<b[^>]*?>(.*?)<\\/b>(?![ \\t]*↔)/g",
     "replaceString": "- <b style=\"color:#f9e2af;font-weight:600;text-shadow:0 0 2px rgba(249,226,175,0.2);\">$1</b>",
     "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      2
+    ],
     "disabled": false,
     "markdownOnly": true,
     "promptOnly": false,
@@ -120,12 +136,14 @@
     "maxDepth": null
   },
   {
-    "id": "7b7ddbf1-fe79-4ebb-89e7-50d184c54d12",
-    "scriptName": "FF5 UI - Menu Master",
-    "findRegex": "/<details>\\s*<summary>([^<]*?)(INTERNAL STATES)([^<]*?)<\\/summary>/g",
-    "replaceString": "<details style=\"background:rgba(20,20,30,0.4);border-radius:6px;\"><summary style=\"background:linear-gradient(90deg, #313244, #1e1e2e);padding:12px 15px;font-weight:bold;color:#cdd6f4;cursor:pointer;text-transform:uppercase;letter-spacing:1px;list-style:none;border-bottom:2px solid #89b4fa;border-radius:6px 6px 0 0;\">$1$2$3</summary>",
+    "id": "c0b29ea5-b3c0-487b-9831-925e390bb529",
+    "scriptName": "FF5 UI - GM Notebook Highlights",
+    "findRegex": "/-[ \\t]*\\[([RTD])\\]/g",
+    "replaceString": "- <b style=\"color:#f9e2af;font-weight:600;text-shadow:0 0 2px rgba(249,226,175,0.2);\">[$1]</b>",
     "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      2
+    ],
     "disabled": false,
     "markdownOnly": true,
     "promptOnly": false,
@@ -135,12 +153,14 @@
     "maxDepth": null
   },
   {
-    "id": "7ea9761a-c65b-4fd8-a219-c4e36839a499",
-    "scriptName": "FF5 UI - Menu Teal",
-    "findRegex": "/<details>\\s*<summary>([^<]*?)(NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|BOND TRACKER)([^<]*?)<\\/summary>((?:(?!<\\/details>)[\\s\\S])*)<\\/details>/g",
-    "replaceString": "<details style=\"background:rgba(148,226,213,0.05);border:1px solid rgba(148,226,213,0.2);border-left:4px solid #94e2d5;margin:8px 4px;border-radius:4px;\"><summary style=\"background:linear-gradient(90deg, rgba(148,226,213,0.25), transparent);padding:10px 15px;font-weight:bold;color:#94e2d5;cursor:pointer;text-transform:uppercase;letter-spacing:0.5px;list-style:none;\">$1$2$3</summary><ul>$4</ul></details>",
+    "id": "1c71f517-7248-4992-804f-404f2d8e27af",
+    "scriptName": "FF5 UI - Collapse Detail Spacing",
+    "findRegex": "/<\\/details>(?:\\s|<br\\s*\\/?>|<p>|<\\/p>)*<details/gi",
+    "replaceString": "</details><details",
     "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      2
+    ],
     "disabled": false,
     "markdownOnly": true,
     "promptOnly": false,
@@ -150,27 +170,82 @@
     "maxDepth": null
   },
   {
-    "id": "59e36332-d094-45de-94ba-72db00fc9fe9",
-    "scriptName": "FF5 UI - Menu Purple",
-    "findRegex": "/<details>\\s*<summary>([^<]*?)(QUESTS|CHEKHOV'S GUN|CHEKHOV SEEDS|INTERNAL THOUGHTS|INV & SKILLS|INVENTORY & STATUS|GM NOTEBOOK|GM'S NOTEBOOK)([^<]*?)<\\/summary>((?:(?!<\\/details>)[\\s\\S])*)<\\/details>/g",
-    "replaceString": "<details style=\"background:rgba(203,166,247,0.05);border:1px solid rgba(203,166,247,0.2);border-left:4px solid #cba6f7;margin:8px 4px;border-radius:4px;\"><summary style=\"background:linear-gradient(90deg, rgba(203,166,247,0.25), transparent);padding:10px 15px;font-weight:bold;color:#cba6f7;cursor:pointer;text-transform:uppercase;letter-spacing:0.5px;list-style:none;\">$1$2$3</summary><div style=\"padding:10px 15px;\">$4</div></details>",
+    "id": "0c72e73b-901c-4acb-a2ab-036ed9906987",
+    "scriptName": "FF5 - Relationship Bars (Positive)",
+    "findRegex": "/-?[ \\t]*(?:<b[^>]*>)?\\s*([^<|↔\\n]+?)\\s*(?:<\\/b>)?\\s*↔\\s*(?:<b[^>]*>)?\\s*([^<|\\n]+?)\\s*(?:<\\/b>)?\\s*\\|\\s*BOND:\\s*(\\+?)(\\d+)\\s*\\|\\s*SPARKS?:\\s*(\\d+)\\s*\\|\\s*GRUDGE:\\s*(\\d+)/gi",
+    "replaceString": "<div style=\"background:rgba(24,24,37,0.8);border:1px solid #45475a;border-radius:6px;padding:15px;margin-bottom:12px;box-shadow:0 4px 10px rgba(0,0,0,0.3);\"><div style=\"text-align:center;font-size:1.1em;font-weight:bold;color:#cdd6f4;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;\">$1 <span style=\"color:#74c7ec;margin:0 8px;\">⟷</span> $2</div><div style=\"display:flex;flex-direction:column;gap:12px;\"><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#a6e3a1;text-shadow:1px 1px 2px #000;\">BOND: $3$4</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#94e2d5,#a6e3a1);box-shadow:0 0 8px rgba(166,227,161,0.5);width:min(calc($4% / 0.2), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f5c2e7;text-shadow:1px 1px 2px #000;\">SPARKS: $5</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#cba6f7,#f5c2e7);box-shadow:0 0 8px rgba(245,194,231,0.5);width:min(calc($5% / 0.15), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f38ba8;text-shadow:1px 1px 2px #000;\">GRUDGE: $6</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#eba0ac,#f38ba8);box-shadow:0 0 8px rgba(243,139,168,0.5);width:min(calc($6% / 0.1), 100%);\"></div></div></div></div></div>",
     "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      2
+    ],
     "disabled": false,
     "markdownOnly": true,
     "promptOnly": false,
     "runOnEdit": false,
     "substituteRegex": 0,
-    "minDepth": null,
+    "minDepth": 0,
     "maxDepth": null
   },
   {
-    "id": "753227b6-c193-4f42-8d00-bbd0b27487aa",
-    "scriptName": "FF5 - Context Saver",
-    "findRegex": "/<!-- GFX_START -->\\s+<internal_states>[\\s\\S]*?<!-- GFX_END -->/g",
+    "id": "6e843478-edbc-43e3-8f15-fb5f6988778a",
+    "scriptName": "FF5 - Relationship Bars (Negative)",
+    "findRegex": "/-?[ \\t]*(?:<b[^>]*>)?\\s*([^<|↔\\n]+?)\\s*(?:<\\/b>)?\\s*↔\\s*(?:<b[^>]*>)?\\s*([^<|\\n]+?)\\s*(?:<\\/b>)?\\s*\\|\\s*BOND:\\s*(-)(\\d+)\\s*\\|\\s*SPARKS?:\\s*(\\d+)\\s*\\|\\s*GRUDGE:\\s*(\\d+)/gi",
+    "replaceString": "<div style=\"background:rgba(24,24,37,0.8);border:1px solid #45475a;border-radius:6px;padding:15px;margin-bottom:12px;box-shadow:0 4px 10px rgba(0,0,0,0.3);\"><div style=\"text-align:center;font-size:1.1em;font-weight:bold;color:#cdd6f4;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;\">$1 <span style=\"color:#74c7ec;margin:0 8px;\">⟷</span> $2</div><div style=\"display:flex;flex-direction:column;gap:12px;\"><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f38ba8;text-shadow:1px 1px 2px #000;\">BOND: $3$4</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#eba0ac,#f38ba8);box-shadow:0 0 8px rgba(243,139,168,0.5);width:min(calc($4% / 0.05), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f5c2e7;text-shadow:1px 1px 2px #000;\">SPARKS: $5</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#cba6f7,#f5c2e7);box-shadow:0 0 8px rgba(245,194,231,0.5);width:min(calc($5% / 0.15), 100%);\"></div></div></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"width:80px;font-weight:bold;font-size:0.85em;text-align:right;color:#f38ba8;text-shadow:1px 1px 2px #000;\">GRUDGE: $6</span><div style=\"flex-grow:1;height:14px;background:rgba(0,0,0,0.6);border-radius:7px;box-shadow:inset 0 1px 4px rgba(0,0,0,0.8);border:1px solid #313244;\"><div style=\"height:100%;border-radius:7px;background:linear-gradient(90deg,#eba0ac,#f38ba8);box-shadow:0 0 8px rgba(243,139,168,0.5);width:min(calc($6% / 0.1), 100%);\"></div></div></div></div></div>",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": 0,
+    "maxDepth": null
+  },
+  {
+    "id": "0e4f02d3-2919-4dba-92be-9faff4069b79",
+    "scriptName": "FF5 - GFX Stripper",
+    "findRegex": "/<!-- GFX_START -->\\s*<div[^>]*?>([\\s\\S]*?)<\\/div>\\s*<!-- GFX_END -->/gi",
+    "replaceString": "$1",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": false,
+    "promptOnly": true,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": 0,
+    "maxDepth": null
+  },
+  {
+    "id": "290da5ae-9203-4b2d-89c7-77865133f740",
+    "scriptName": "FF5 - Image Prompt Stripper",
+    "findRegex": "/<!--\\s*IMG_PROMPT:[\\s\\S]*?-->/gi",
     "replaceString": "",
     "trimStrings": [],
-    "placement": [2],
+    "placement": [
+      2
+    ],
+    "disabled": false,
+    "markdownOnly": false,
+    "promptOnly": true,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": 0,
+    "maxDepth": null
+  },
+  {
+    "id": "d25127ad-c9d9-4005-a5bc-6887453ae416",
+    "scriptName": "FF5 - Context Saver",
+    "findRegex": "/<!-- GFX_START -->\\s*<internal_states>[\\s\\S]*?<!-- GFX_END -->\\s*/gi",
+    "replaceString": "",
+    "trimStrings": [],
+    "placement": [
+      2
+    ],
     "disabled": false,
     "markdownOnly": false,
     "promptOnly": true,
