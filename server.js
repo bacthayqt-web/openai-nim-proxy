@@ -255,6 +255,128 @@ function applyFrontendDisplay(text, frontend, enabled) {
     return runRegexScripts(text, displayScripts);
 }
 
+// Models occasionally ignore the Janitor-only hidden-state template and emit
+// a visible Markdown, XML, or FF5 HTML state panel instead. Detect the start of
+// any known state representation so the proxy can normalize it deterministically
+// before it reaches Janitor. Pop-in Graphics are deliberately excluded.
+function findJanitorStateStart(input) {
+    var text = String(input || '');
+    var candidates = [];
+    var patterns = [
+        /<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/i,
+        /<internal[_\s-]*states?\b/i,
+        /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,100}INTERNAL\s+STATES?\b/i,
+        /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b/im,
+        /(?:^|\n)[ \t]*(?:\*\*)?\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)\](?:\*\*)?/im,
+        /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|INVENTORY, FEATS & TITLES)\b/im
+    ];
+
+    patterns.forEach(function(pattern) {
+        var match = pattern.exec(text);
+        if (match) candidates.push(match.index);
+    });
+
+    if (candidates.length === 0) return -1;
+    var start = Math.min.apply(Math, candidates);
+
+    // Generic FF5 output wraps Internal States in GFX markers. Include the
+    // opening wrapper in the hidden block, but do not consume unrelated phone,
+    // terminal, letter, or map graphics.
+    var gfxStart = text.lastIndexOf('<!-- GFX_START -->', start);
+    if (gfxStart !== -1 && start - gfxStart <= 1024) {
+        start = gfxStart;
+    }
+
+    return start;
+}
+
+function normalizeJanitorStateBlock(input) {
+    var body = String(input || '');
+
+    body = body
+        .replace(/<!--\s*GFX_START\s*-->/gi, '')
+        .replace(/<!--\s*GFX_END\s*-->/gi, '')
+        .replace(/<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/gi, '')
+        .replace(/END[_\s-]*FF5[_\s-]*INTERNAL[_\s-]*STATE\s*-->/gi, '')
+        .replace(/<\/?internal[_\s-]*states?\b[^>]*>/gi, '')
+        .replace(/<!--|-->/g, '')
+        .trim();
+
+    if (!body) return '';
+
+    // HTML comments may not contain a double hyphen. Replace it even when the
+    // model generated one inside prose, a range, or a malformed nested comment.
+    body = body.replace(/--+/g, '—');
+
+    return '<!-- FF5_INTERNAL_STATE\n' + body + '\nEND_FF5_INTERNAL_STATE -->';
+}
+
+function hideJanitorInternalState(input) {
+    var text = String(input || '');
+    var start = findJanitorStateStart(text);
+    if (start === -1) return text;
+
+    var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
+    var hidden = normalizeJanitorStateBlock(text.slice(start));
+    if (!hidden) return narrative.trimEnd();
+
+    return narrative.trimEnd() + (narrative.trim() ? '\n\n' : '') + hidden;
+}
+
+function createJanitorStateStream() {
+    var pending = '';
+    var stateBuffer = '';
+    var stateStarted = false;
+    // Retain only enough text to recognize a marker split across chunks. This
+    // keeps ordinary narrative streaming with a small fixed delay instead of
+    // buffering an entire short response.
+    var lookbehind = 256;
+
+    return {
+        push: function(chunk) {
+            var content = String(chunk || '');
+            if (!content) return '';
+
+            if (stateStarted) {
+                stateBuffer += content;
+                return '';
+            }
+
+            pending += content;
+            var start = findJanitorStateStart(pending);
+            if (start !== -1) {
+                var narrative = pending.slice(0, start);
+                stateBuffer = pending.slice(start);
+                pending = '';
+                stateStarted = true;
+                return narrative;
+            }
+
+            if (pending.length <= lookbehind) return '';
+            var safeLength = pending.length - lookbehind;
+            var safe = pending.slice(0, safeLength);
+            pending = pending.slice(safeLength);
+            return safe;
+        },
+        finish: function() {
+            if (!stateStarted) {
+                var remainder = pending;
+                pending = '';
+                return remainder;
+            }
+
+            var hidden = normalizeJanitorStateBlock(stateBuffer);
+            stateBuffer = '';
+            stateStarted = false;
+            pending = '';
+            return hidden ? '\n\n' + hidden : '';
+        },
+        hasState: function() {
+            return stateStarted;
+        }
+    };
+}
+
 // FIX 1: Merge System Messages in Presets safely
 function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverrides) {
     if (!preset || !preset.prompts || preset.prompts.length === 0) {
@@ -735,6 +857,9 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var displayBuffer = '';
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
+    var janitorStateStream = frontend === 'janitor' && useFF5Display
+        ? createJanitorStateStream()
+        : null;
 
     function safeWrite(obj) {
         try {
@@ -748,11 +873,14 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     function processDelta(delta) {
         if (!delta) return;
 
+        var isReasoningDelta = false;
+
         if (SHOW_REASONING) {
             var reasoning = delta.reasoning_content;
             var content = delta.content;
 
             if (reasoning) {
+                isReasoningDelta = true;
                 var cleanReasoning = cleanStructuredContent(reasoning);
                 if (reasoningActive) {
                     delta.content = cleanReasoning;
@@ -781,9 +909,21 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             return;
         }
 
-        // Janitor receives Markdown templates and a hidden state comment, so
-        // it needs no HTML UI transform.
-        if (!useFF5Display || frontend === 'janitor') return true;
+        // Janitor narrative continues streaming, but a possible state tail is
+        // retained until completion and normalized into one valid hidden HTML
+        // comment. This prevents visible leakage when the model ignores or
+        // malforms the requested state wrapper.
+        if (janitorStateStream) {
+            // Native reasoning may discuss the phrase "Internal States" as
+            // part of BOLT. Do not mistake displayed reasoning for the final
+            // state record when SHOW_REASONING is intentionally enabled.
+            if (isReasoningDelta) return true;
+            delta.content = janitorStateStream.push(delta.content);
+            if (delta.content === '') return;
+            return true;
+        }
+
+        if (!useFF5Display) return true;
 
         // Hold only complete FF5 GFX blocks. Narrative text continues streaming,
         // while a status/graphics block is released as soon as its closing marker
@@ -887,6 +1027,15 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             displayBuffer = '';
         }
 
+        if (janitorStateStream) {
+            var janitorRemainder = janitorStateStream.finish();
+            if (janitorRemainder) {
+                safeWrite({
+                    choices: [{ delta: { content: janitorRemainder } }]
+                });
+            }
+        }
+
         if (reasoningActive) {
             safeWrite({
                 choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
@@ -926,6 +1075,10 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
 
+                if (frontend === 'janitor' && useFF5Display) {
+                    fullContent = hideJanitorInternalState(fullContent);
+                }
+
 
                 return {
                     index: choice.index !== undefined ? choice.index : index,
@@ -952,28 +1105,47 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
     }
 }
 
-app.listen(PORT, '0.0.0.0', function() {
-    console.log('Proxy running on port ' + PORT);
-    console.log('   - SHOW_REASONING: ' + SHOW_REASONING);
-    console.log('   - ENABLE_THINKING_MODE: ' + ENABLE_THINKING_MODE);
-    console.log('   - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
-    console.log('   - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
-    console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
-    console.log('   - FreakyDeepy preset loaded: ' + (PRESET_FREAKYDEEPY ? 'YES' : 'NO'));
+if (require.main === module) {
+    app.listen(PORT, '0.0.0.0', function() {
+        console.log('Proxy running on port ' + PORT);
+        console.log('   - SHOW_REASONING: ' + SHOW_REASONING);
+        console.log('   - ENABLE_THINKING_MODE: ' + ENABLE_THINKING_MODE);
+        console.log('   - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
+        console.log('   - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
+        console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
+        console.log('   - FreakyDeepy preset loaded: ' + (PRESET_FREAKYDEEPY ? 'YES' : 'NO'));
 
-    if (!NIM_API_KEY) {
-        console.warn('WARNING: NIM_API_KEY is missing!');
-    }
+        if (!NIM_API_KEY) {
+            console.warn('WARNING: NIM_API_KEY is missing!');
+        }
 
-    console.log('');
-    console.log('Model -> Preset Mapping:');
-    var modelKeys = Object.keys(MODEL_MAPPING);
-    for (var i = 0; i < modelKeys.length; i++) {
-        var openaiId = modelKeys[i];
-        var nimId = MODEL_MAPPING[openaiId];
-        var preset = getPresetForModel(nimId);
-        var presetName = preset ? preset.name : 'NONE';
-        var isKimi = isKimiModel(nimId) ? 'Kimi' : 'Non-Kimi';
-        console.log('   - ' + openaiId + ' -> ' + nimId + ' (' + isKimi + ') -> ' + presetName);
-    }
-});
+        console.log('');
+        console.log('Model -> Preset Mapping:');
+        var modelKeys = Object.keys(MODEL_MAPPING);
+        for (var i = 0; i < modelKeys.length; i++) {
+            var openaiId = modelKeys[i];
+            var nimId = MODEL_MAPPING[openaiId];
+            var preset = getPresetForModel(nimId);
+            var presetName = preset ? preset.name : 'NONE';
+            var isKimi = isKimiModel(nimId) ? 'Kimi' : 'Non-Kimi';
+            console.log('   - ' + openaiId + ' -> ' + nimId + ' (' + isKimi + ') -> ' + presetName);
+        }
+    });
+}
+
+// Export the Express app for serverless runtimes and expose pure helpers only
+// under _test so regression tests exercise the exact production code.
+module.exports = app;
+module.exports._test = {
+    detectFrontend: detectFrontend,
+    findJanitorStateStart: findJanitorStateStart,
+    normalizeJanitorStateBlock: normalizeJanitorStateBlock,
+    hideJanitorInternalState: hideJanitorInternalState,
+    createJanitorStateStream: createJanitorStateStream,
+    handleStream: handleStream,
+    handleNonStream: handleNonStream,
+    prepareFF5History: prepareFF5History,
+    buildOrderedMessagesFromPreset: buildOrderedMessagesFromPreset,
+    expandPresetMacros: expandPresetMacros,
+    getOrderedPresetPrompts: getOrderedPresetPrompts
+};
