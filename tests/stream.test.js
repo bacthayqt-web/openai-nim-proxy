@@ -4,17 +4,11 @@ const assert = require('assert');
 const { PassThrough } = require('stream');
 const helpers = require('../server')._test;
 
-function outsideHiddenComment(text) {
-    return text.replace(/<!--\s*FF5_INTERNAL_STATE\b[\s\S]*?END_FF5_INTERNAL_STATE\s*-->/g, '');
-}
-
-function assertOneValidHiddenState(text) {
-    const matches = text.match(/<!--\s*FF5_INTERNAL_STATE\b[\s\S]*?END_FF5_INTERNAL_STATE\s*-->/g) || [];
-    assert.strictEqual(matches.length, 1, 'Expected exactly one normalized hidden state comment');
-    const body = matches[0]
-        .replace(/^<!--\s*FF5_INTERNAL_STATE\s*/, '')
-        .replace(/END_FF5_INTERNAL_STATE\s*-->$/, '');
-    assert(!body.includes('--'), 'Hidden comment body must not contain a double hyphen');
+function assertNoInternalState(text) {
+    assert(!/FF5_INTERNAL_STATE/i.test(text), 'Janitor output must not contain a hidden state comment');
+    assert(!/<\/?internal[_\s-]*states?/i.test(text), 'Janitor output must not contain state XML');
+    assert(!/(?:^|\n)\s*(?:#{1,6}\s*)?(?:🎬\s*)?INTERNAL STATES?/im.test(text), 'Janitor output must not contain a state heading');
+    assert(!/(?:^|\n)\s*\[(?:NPC AGENDAS|WORLD SIM|GM NOTEBOOK|DND TASK SIM|INTERNAL THOUGHTS)\]/im.test(text), 'Janitor output must not contain state sections');
 }
 
 function makeEvent(content) {
@@ -37,7 +31,7 @@ function parseOutput(writes) {
     return content;
 }
 
-async function runJanitorStream(contents, transportCuts) {
+async function runFrontendStream(contents, frontend, transportCuts) {
     const input = new PassThrough();
     const writes = [];
     let resolveEnd;
@@ -49,7 +43,7 @@ async function runJanitorStream(contents, transportCuts) {
         end() { resolveEnd(); }
     };
 
-    helpers.handleStream(input, res, 'janitor', true);
+    helpers.handleStream(input, res, frontend, true);
     const wire = contents.map(makeEvent).join('') + 'data: [DONE]\n\n';
 
     if (Array.isArray(transportCuts) && transportCuts.length) {
@@ -73,39 +67,38 @@ async function runJanitorStream(contents, transportCuts) {
     const visibleMarkdown = helpers.hideJanitorInternalState(
         'Narrative.\n\n### INTERNAL STATES\n[GM NOTEBOOK]\nSecret -- unfinished'
     );
-    assert.strictEqual(outsideHiddenComment(visibleMarkdown).trim(), 'Narrative.');
-    assertOneValidHiddenState(visibleMarkdown);
+    assert.strictEqual(visibleMarkdown, 'Narrative.');
+    assertNoInternalState(visibleMarkdown);
 
     const genericHtml = helpers.hideJanitorInternalState(
         'Narrative.\n<!-- GFX_START -->\n<internal_states><details><summary>🎬 INTERNAL STATES</summary>Secret</details></internal_states>\n<!-- GFX_END -->'
     );
-    assert.strictEqual(outsideHiddenComment(genericHtml).trim(), 'Narrative.');
-    assertOneValidHiddenState(genericHtml);
-    assert(!outsideHiddenComment(genericHtml).includes('GFX_START'));
+    assert.strictEqual(genericHtml, 'Narrative.');
+    assertNoInternalState(genericHtml);
 
     const malformed = helpers.hideJanitorInternalState(
         'Narrative.\n<!-- FF5_INTERNAL_STATE\nTURN: 4\n[WORLD SIM]\nEvent'
     );
-    assert.strictEqual(outsideHiddenComment(malformed).trim(), 'Narrative.');
-    assertOneValidHiddenState(malformed);
+    assert.strictEqual(malformed, 'Narrative.');
+    assertNoInternalState(malformed);
 
     const alreadyHidden = helpers.hideJanitorInternalState(
         'Narrative.\n<!-- FF5_INTERNAL_STATE\nTURN: 5\n[QUESTS]\nNone\nEND_FF5_INTERNAL_STATE -->'
     );
-    assert.strictEqual(outsideHiddenComment(alreadyHidden).trim(), 'Narrative.');
-    assertOneValidHiddenState(alreadyHidden);
+    assert.strictEqual(alreadyHidden, 'Narrative.');
+    assertNoInternalState(alreadyHidden);
 
     const xml = helpers.hideJanitorInternalState(
         'Narrative.\n<internal_state>[BONDS]\nNPC: 3</internal_state>'
     );
-    assert.strictEqual(outsideHiddenComment(xml).trim(), 'Narrative.');
-    assertOneValidHiddenState(xml);
+    assert.strictEqual(xml, 'Narrative.');
+    assertNoInternalState(xml);
 
     const orphan = helpers.hideJanitorInternalState(
         'Narrative.\n\n[INTERNAL THOUGHTS]\nNPC: leave now'
     );
-    assert.strictEqual(outsideHiddenComment(orphan).trim(), 'Narrative.');
-    assertOneValidHiddenState(orphan);
+    assert.strictEqual(orphan, 'Narrative.');
+    assertNoInternalState(orphan);
 
     const popIn = '<!-- GFX_START --><div>📱 Phone message</div><!-- GFX_END -->';
     assert.strictEqual(helpers.hideJanitorInternalState('Narrative.\n' + popIn), 'Narrative.\n' + popIn);
@@ -115,29 +108,51 @@ async function runJanitorStream(contents, transportCuts) {
     assert(progressive.push(longNarrative).length > 0, 'Long narrative must stream before completion');
     assert(progressive.finish().length > 0, 'Buffered narrative tail must flush at completion');
 
-    const streamedMarkdown = await runJanitorStream([
+    const stripping = helpers.createJanitorStateStream();
+    assert.strictEqual(stripping.push('Narrative.\n\n### INTERNAL STATES\n[QUESTS]').trim(), 'Narrative.');
+    assert.strictEqual(stripping.push('\nSecret'), '');
+    assert.strictEqual(stripping.finish(), '', 'Detected Janitor state tail must be discarded');
+
+    const streamedMarkdown = await runFrontendStream([
         'Narrative paragraph.',
         '\n\n### INTER',
         'NAL STATES\n[GM NOTEBOOK]\nSecret -- note'
-    ], [1, 2, 5, 3, 13, 8, 21]);
-    assert.strictEqual(outsideHiddenComment(streamedMarkdown.content).trim(), 'Narrative paragraph.');
-    assertOneValidHiddenState(streamedMarkdown.content);
+    ], 'janitor', [1, 2, 5, 3, 13, 8, 21]);
+    assert.strictEqual(streamedMarkdown.content.trim(), 'Narrative paragraph.');
+    assertNoInternalState(streamedMarkdown.content);
 
-    const streamedHtml = await runJanitorStream([
+    const streamedHtml = await runFrontendStream([
         'Narrative paragraph.\n',
         '<!-- GFX_',
         'START -->\n<internal_',
         'states><details><summary>INTERNAL STATES</summary>Secret</details></internal_states><!-- GFX_END -->'
-    ], [7, 1, 19, 4, 2, 33]);
-    assert.strictEqual(outsideHiddenComment(streamedHtml.content).trim(), 'Narrative paragraph.');
-    assertOneValidHiddenState(streamedHtml.content);
+    ], 'janitor', [7, 1, 19, 4, 2, 33]);
+    assert.strictEqual(streamedHtml.content.trim(), 'Narrative paragraph.');
+    assertNoInternalState(streamedHtml.content);
 
-    const streamedPopIn = await runJanitorStream([
+    const streamedPopIn = await runFrontendStream([
         'Narrative.\n',
         '<!-- GFX_START --><div>📱 Phone message</div><!-- GFX_END -->'
-    ], [3, 9, 2, 17]);
+    ], 'janitor', [3, 9, 2, 17]);
     assert(streamedPopIn.content.includes('📱 Phone message'), 'Ordinary Pop-in Graphics must remain visible');
-    assert(!streamedPopIn.content.includes('FF5_INTERNAL_STATE'));
+    assertNoInternalState(streamedPopIn.content);
+
+    const genericHtmlStream = await runFrontendStream([
+        'Narrative paragraph.\n',
+        '<!-- GFX_START -->\n<internal_states><details><summary>🎬 INTERNAL STATES</summary>',
+        '<details><summary>WORLD SIM</summary>Event</details></details></internal_states><!-- GFX_END -->'
+    ], 'default', [5, 2, 17, 3, 29]);
+    assert(genericHtmlStream.content.includes('INTERNAL STATES'), 'Generic state heading must remain visible');
+    assert(genericHtmlStream.content.includes('<details style='), 'Generic native HTML must receive FF5 styling');
+    assert(genericHtmlStream.content.includes('WORLD SIM'), 'Generic state sections must remain present');
+
+    const genericFallbackStream = await runFrontendStream([
+        'Narrative paragraph.\n',
+        '<!-- FF5_INTERNAL_STATE\nTURN: 7\n[WORLD SIM]\nEvent\nEND_FF5_INTERNAL_STATE -->'
+    ], 'default', [4, 11, 1, 23]);
+    assert(genericFallbackStream.content.includes('<details style='), 'Generic hidden-comment variant must become a visible panel');
+    assert(genericFallbackStream.content.includes('TURN: 7'));
+    assert(genericFallbackStream.content.includes('[WORLD SIM]'));
 
     let nonStreamJson = null;
     helpers.handleNonStream({
@@ -154,8 +169,27 @@ async function runJanitorStream(contents, transportCuts) {
         status() { return this; }
     }, 'janitor', true);
     const nonStreamContent = nonStreamJson.choices[0].message.content;
-    assert.strictEqual(outsideHiddenComment(nonStreamContent).trim(), 'Narrative.');
-    assertOneValidHiddenState(nonStreamContent);
+    assert.strictEqual(nonStreamContent, 'Narrative.');
+    assertNoInternalState(nonStreamContent);
+
+    let genericNonStreamJson = null;
+    helpers.handleNonStream({
+        choices: [{
+            index: 0,
+            message: {
+                role: 'assistant',
+                content: 'Narrative.\n<!-- FF5_INTERNAL_STATE\nTURN: 8\n[WORLD SIM]\nEvent\nEND_FF5_INTERNAL_STATE -->'
+            },
+            finish_reason: 'stop'
+        }]
+    }, 'gpt-4', {
+        json(value) { genericNonStreamJson = value; },
+        status() { return this; }
+    }, 'default', true);
+    const genericNonStreamContent = genericNonStreamJson.choices[0].message.content;
+    assert(genericNonStreamContent.includes('<details style='));
+    assert(genericNonStreamContent.includes('TURN: 8'));
+    assert(genericNonStreamContent.includes('[WORLD SIM]'));
 
     console.log('stream.test.js: all assertions passed');
 })().catch((error) => {
