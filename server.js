@@ -79,6 +79,26 @@ var PROMPT_OVERRIDES = {
     janitor: loadPreset('overrides.janitor') || {}
 };
 
+// Janitor receives narrative and Markdown Pop-in Graphics only. Internal
+// States are intentionally disabled there because Janitor has no dependable
+// hidden metadata channel: HTML comments can surface in rendered messages.
+// Chub and other generic clients keep the complete FF5 state stack.
+var INTERNAL_STATE_PROMPT_IDS = [
+    '019f62e8-892f-7021-97a6-42e1b83eaad3', // DnD Simulator
+    '019f67b4-7381-7000-bcc4-496b2e6ed920', // Internal Agenda
+    '019f67ad-c0b1-7000-aca4-0e2480fa02db', // GM Notebook
+    '019f62e8-892f-7022-9eb9-e00c2944ebc6', // Inventory
+    '019f62e8-892f-7023-825d-9351eca0347f', // Relationships
+    '019f62e8-892f-7024-a40f-b906fceb58d2', // World Sim
+    '019f62e8-892f-7025-be65-8859e7730ee0', // Chekhov's Gun
+    '019f62e8-892f-7026-92ea-34ff510c244b', // Internal Thoughts
+    '019f62e8-892f-7027-93ef-159f3d55c410'  // Internal States master
+];
+
+var PROMPT_EXCLUSIONS = {
+    janitor: INTERNAL_STATE_PROMPT_IDS
+};
+
 function getPresetForModel(nimModelId) {
     return PRESET_FRANKENSTEIN;
 }
@@ -214,7 +234,7 @@ function runRegexScripts(text, scripts) {
     return output;
 }
 
-function prepareFF5History(messages) {
+function prepareFF5History(messages, dropAllInternalStates) {
     var cleanupScripts = FF5_REGEX.filter(function(script) {
         // These are the machine-tag/context cleanup rules. Relationship-bar
         // styling is intentionally excluded from model context.
@@ -236,10 +256,12 @@ function prepareFF5History(messages) {
         });
 
         var cleanedContent = runRegexScripts(message.content, applicable);
-        // The FF5 regex suite removes generic state blocks at depth >= 2. The
-        // Janitor representation is a hidden comment, so remove old copies
-        // explicitly while retaining the newest state for the next turn.
-        if (depth >= 2) {
+        // Janitor no longer uses Internal States, so purge every state variant
+        // from old history. Generic clients retain the latest state for FF5
+        // continuity and prune older copies after two turns.
+        if (dropAllInternalStates) {
+            cleanedContent = stripInternalState(cleanedContent);
+        } else if (depth >= 2) {
             cleanedContent = cleanedContent.replace(hiddenJanitorState, '');
         }
 
@@ -255,11 +277,11 @@ function applyFrontendDisplay(text, frontend, enabled) {
     return runRegexScripts(text, displayScripts);
 }
 
-// Models occasionally ignore the Janitor-only hidden-state template and emit
-// a visible Markdown, XML, or FF5 HTML state panel instead. Detect the start of
-// any known state representation so the proxy can normalize it deterministically
-// before it reaches Janitor. Pop-in Graphics are deliberately excluded.
-function findJanitorStateStart(input) {
+// Detect the start of any known Internal States representation. This supports
+// response cleanup for Janitor and deterministic display recovery for generic
+// clients when a model deviates from the requested FF5 HTML template.
+// Ordinary Pop-in Graphics are deliberately excluded.
+function findInternalStateStart(input) {
     var text = String(input || '');
     var candidates = [];
     var patterns = [
@@ -290,40 +312,80 @@ function findJanitorStateStart(input) {
     return start;
 }
 
-function normalizeJanitorStateBlock(input) {
-    var body = String(input || '');
+function stripInternalState(input) {
+    var text = String(input || '');
+    var start = findInternalStateStart(text);
+    if (start === -1) return text;
 
-    body = body
+    var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
+    return narrative.trimEnd();
+}
+
+function escapeHtml(input) {
+    return String(input || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function normalizeGenericInternalState(input) {
+    var state = String(input || '').trim();
+    if (!state) return '';
+
+    // Preserve the full native FF5 hierarchy when the model followed the
+    // generic HTML template, adding wrappers only if they were omitted.
+    if (/<internal[_\s-]*states?\b/i.test(state) && /<details\b/i.test(state)) {
+        if (state.indexOf('<!-- GFX_START -->') === -1) {
+            state = '<!-- GFX_START -->\n' + state;
+        }
+        if (state.indexOf('<!-- GFX_END -->') === -1) {
+            state += '\n<!-- GFX_END -->';
+        }
+        return state;
+    }
+
+    // If a model emits Janitor-style comments or Markdown despite using the
+    // generic route, convert it into one visible, collapsible fallback panel.
+    var body = state
         .replace(/<!--\s*GFX_START\s*-->/gi, '')
         .replace(/<!--\s*GFX_END\s*-->/gi, '')
         .replace(/<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/gi, '')
         .replace(/END[_\s-]*FF5[_\s-]*INTERNAL[_\s-]*STATE\s*-->/gi, '')
         .replace(/<\/?internal[_\s-]*states?\b[^>]*>/gi, '')
+        .replace(/(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b[^\n]*/i, '')
         .replace(/<!--|-->/g, '')
         .trim();
 
     if (!body) return '';
 
-    // HTML comments may not contain a double hyphen. Replace it even when the
-    // model generated one inside prose, a range, or a malformed nested comment.
-    body = body.replace(/--+/g, '—');
-
-    return '<!-- FF5_INTERNAL_STATE\n' + body + '\nEND_FF5_INTERNAL_STATE -->';
+    return '<!-- GFX_START -->\n' +
+        '<internal_states>\n' +
+        '<details>\n' +
+        '<summary>🎬 INTERNAL STATES</summary>\n' +
+        '<pre style="white-space:pre-wrap;margin:0;">' + escapeHtml(body) + '</pre>\n' +
+        '</details>\n' +
+        '</internal_states>\n' +
+        '<!-- GFX_END -->';
 }
 
-function hideJanitorInternalState(input) {
+function displayGenericInternalState(input, frontend, enabled) {
     var text = String(input || '');
-    var start = findJanitorStateStart(text);
-    if (start === -1) return text;
+    var start = findInternalStateStart(text);
+    if (start === -1) return applyFrontendDisplay(text, frontend, enabled);
 
     var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
-    var hidden = normalizeJanitorStateBlock(text.slice(start));
-    if (!hidden) return narrative.trimEnd();
-
-    return narrative.trimEnd() + (narrative.trim() ? '\n\n' : '') + hidden;
+    var state = normalizeGenericInternalState(text.slice(start));
+    var combined = narrative.trimEnd() + (narrative.trim() && state ? '\n\n' : '') + state;
+    return applyFrontendDisplay(combined, frontend, enabled);
 }
 
-function createJanitorStateStream() {
+// Compatibility alias retained for existing tests or imports. "Hide" now
+// means remove from the response entirely; no state comment is returned.
+function hideJanitorInternalState(input) {
+    return stripInternalState(input);
+}
+
+function createInternalStateStream(frontend) {
     var pending = '';
     var stateBuffer = '';
     var stateStarted = false;
@@ -343,7 +405,7 @@ function createJanitorStateStream() {
             }
 
             pending += content;
-            var start = findJanitorStateStart(pending);
+            var start = findInternalStateStart(pending);
             if (start !== -1) {
                 var narrative = pending.slice(0, start);
                 stateBuffer = pending.slice(start);
@@ -365,11 +427,13 @@ function createJanitorStateStream() {
                 return remainder;
             }
 
-            var hidden = normalizeJanitorStateBlock(stateBuffer);
+            var state = frontend === 'janitor'
+                ? ''
+                : normalizeGenericInternalState(stateBuffer);
             stateBuffer = '';
             stateStarted = false;
             pending = '';
-            return hidden ? '\n\n' + hidden : '';
+            return state ? '\n\n' + state : '';
         },
         hasState: function() {
             return stateStarted;
@@ -377,19 +441,34 @@ function createJanitorStateStream() {
     };
 }
 
+function createJanitorStateStream() {
+    return createInternalStateStream('janitor');
+}
+
 // FIX 1: Merge System Messages in Presets safely
-function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverrides) {
+function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverrides, promptExclusions) {
     if (!preset || !preset.prompts || preset.prompts.length === 0) {
         return originalMessages;
     }
 
     var overrides = promptOverrides || {};
+    var exclusions = promptExclusions || [];
+    var internalStatesDisabled = exclusions.indexOf('019f62e8-892f-7027-93ef-159f3d55c410') !== -1;
 
     var macroVariables = {};
     var presetMessages = getOrderedPresetPrompts(preset)
-        .filter(function(p) { return p.content && p.content.trim() !== ''; })
+        .filter(function(p) {
+            return p.content && p.content.trim() !== '' && exclusions.indexOf(p.identifier) === -1;
+        })
         .map(function(p) {
-            var content = overrides[p.identifier] || p.content;
+            var hasOverride = Object.prototype.hasOwnProperty.call(overrides, p.identifier);
+            var content = hasOverride ? overrides[p.identifier] : p.content;
+            if (internalStatesDisabled && p.identifier === 'jailbreak') {
+                content = content.replace(
+                    /Ensure internal states created correctly at end of every response\s*-\s*no need verbally to respond to this message\./i,
+                    'Internal States are disabled on this frontend; never generate or append them.'
+                );
+            }
             return {
                 role: p.role || 'system',
                 content: expandPresetMacros(content, macroVariables)
@@ -456,7 +535,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
                 ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences.'
-                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative and Pop-in Graphics. Never output visible raw HTML, CSS, details/summary tags, or GFX wrapper comments. The sole exception is the required hidden <!-- FF5_INTERNAL_STATE ... END_FF5_INTERNAL_STATE --> comment at the absolute end of the response. Emit that comment exactly as instructed, outside code fences; do not display or explain it.')
+                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative and Pop-in Graphics. Internal States are disabled. Never generate an Internal States record, state heading, state XML, hidden state comment, or GFX-wrapped state panel. Never output visible raw HTML, CSS, details/summary tags, or GFX wrapper comments.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -676,26 +755,22 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
 
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
-            if (preset === PRESET_FRANKENSTEIN && frontend === 'janitor') {
-                var latestAssistantMessage = null;
-                for (var historyIndex = messages.length - 1; historyIndex >= 0; historyIndex--) {
-                    if (messages[historyIndex] && messages[historyIndex].role === 'assistant') {
-                        latestAssistantMessage = messages[historyIndex];
-                        break;
-                    }
-                }
-                var hiddenStateRestored = !!(
-                    latestAssistantMessage &&
-                    typeof latestAssistantMessage.content === 'string' &&
-                    latestAssistantMessage.content.indexOf('<!-- FF5_INTERNAL_STATE') !== -1
-                );
-                console.log('Janitor hidden Internal State restored from history: ' +
-                    (hiddenStateRestored ? 'YES' : 'NO (normal on first turn)'));
-            }
-            var sourceMessages = preset === PRESET_FRANKENSTEIN ? prepareFF5History(messages) : messages;
-            processedMessages = buildOrderedMessagesFromPreset(preset, sourceMessages, promptOverrides);
+            var promptExclusions = PROMPT_EXCLUSIONS[frontend] || [];
+            var dropAllInternalStates = frontend === 'janitor';
+            var sourceMessages = preset === PRESET_FRANKENSTEIN
+                ? prepareFF5History(messages, dropAllInternalStates)
+                : messages;
+            processedMessages = buildOrderedMessagesFromPreset(
+                preset,
+                sourceMessages,
+                promptOverrides,
+                promptExclusions
+            );
             console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');
-            console.log('   - Preset prompts injected: ' + preset.prompts.length);
+            console.log('   - Preset prompts injected: ' + (preset.prompts.length - promptExclusions.length));
+            if (dropAllInternalStates) {
+                console.log('   - Internal States: DISABLED for Janitor');
+            }
         } else {
             console.log('No preset available for model ' + nimModel + ', using raw messages');
         }
@@ -857,8 +932,8 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var displayBuffer = '';
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
-    var janitorStateStream = frontend === 'janitor' && useFF5Display
-        ? createJanitorStateStream()
+    var internalStateStream = useFF5Display
+        ? createInternalStateStream(frontend)
         : null;
 
     function safeWrite(obj) {
@@ -909,18 +984,16 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             return;
         }
 
-        // Janitor narrative continues streaming, but a possible state tail is
-        // retained until completion and normalized into one valid hidden HTML
-        // comment. This prevents visible leakage when the model ignores or
-        // malforms the requested state wrapper.
-        if (janitorStateStream) {
+        // Hold a possible state tail until completion. Janitor drops it;
+        // generic clients receive one normalized visible FF5 panel.
+        if (internalStateStream) {
             // Native reasoning may discuss the phrase "Internal States" as
             // part of BOLT. Do not mistake displayed reasoning for the final
             // state record when SHOW_REASONING is intentionally enabled.
             if (isReasoningDelta) return true;
-            delta.content = janitorStateStream.push(delta.content);
+            delta.content = internalStateStream.push(delta.content);
             if (delta.content === '') return;
-            return true;
+            if (frontend === 'janitor') return true;
         }
 
         if (!useFF5Display) return true;
@@ -1020,20 +1093,24 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             processData(buffer.slice(6));
         }
 
+        if (internalStateStream) {
+            var stateRemainder = internalStateStream.finish();
+            if (stateRemainder) {
+                if (frontend === 'janitor') {
+                    safeWrite({
+                        choices: [{ delta: { content: stateRemainder } }]
+                    });
+                } else {
+                    displayBuffer += stateRemainder;
+                }
+            }
+        }
+
         if (displayBuffer) {
             safeWrite({
                 choices: [{ delta: { content: applyFrontendDisplay(displayBuffer, frontend, useFF5Display) } }]
             });
             displayBuffer = '';
-        }
-
-        if (janitorStateStream) {
-            var janitorRemainder = janitorStateStream.finish();
-            if (janitorRemainder) {
-                safeWrite({
-                    choices: [{ delta: { content: janitorRemainder } }]
-                });
-            }
         }
 
         if (reasoningActive) {
@@ -1067,18 +1144,16 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
             model: model,
             choices: (data.choices || []).map(function(choice, index) {
                 var rawContent = (choice && choice.message && choice.message.content) || '';
-                var fullContent = applyFrontendDisplay(cleanStructuredContent(rawContent), frontend, useFF5Display);
+                var cleanContent = cleanStructuredContent(rawContent);
+                var fullContent = frontend === 'janitor' && useFF5Display
+                    ? stripInternalState(cleanContent)
+                    : displayGenericInternalState(cleanContent, frontend, useFF5Display);
 
                 if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
                     var rawReasoning = choice.message.reasoning_content;
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
-
-                if (frontend === 'janitor' && useFF5Display) {
-                    fullContent = hideJanitorInternalState(fullContent);
-                }
-
 
                 return {
                     index: choice.index !== undefined ? choice.index : index,
@@ -1138,14 +1213,18 @@ if (require.main === module) {
 module.exports = app;
 module.exports._test = {
     detectFrontend: detectFrontend,
-    findJanitorStateStart: findJanitorStateStart,
-    normalizeJanitorStateBlock: normalizeJanitorStateBlock,
+    findInternalStateStart: findInternalStateStart,
+    stripInternalState: stripInternalState,
+    normalizeGenericInternalState: normalizeGenericInternalState,
+    displayGenericInternalState: displayGenericInternalState,
     hideJanitorInternalState: hideJanitorInternalState,
     createJanitorStateStream: createJanitorStateStream,
+    createInternalStateStream: createInternalStateStream,
     handleStream: handleStream,
     handleNonStream: handleNonStream,
     prepareFF5History: prepareFF5History,
     buildOrderedMessagesFromPreset: buildOrderedMessagesFromPreset,
     expandPresetMacros: expandPresetMacros,
-    getOrderedPresetPrompts: getOrderedPresetPrompts
+    getOrderedPresetPrompts: getOrderedPresetPrompts,
+    internalStatePromptIds: INTERNAL_STATE_PROMPT_IDS
 };
