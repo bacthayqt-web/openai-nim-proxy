@@ -146,10 +146,9 @@ var PROMPT_OVERRIDES = {
     janitor: loadPreset('overrides.janitor') || {}
 };
 
-// Janitor receives narrative and Markdown Pop-in Graphics only. Internal
-// States are intentionally disabled there because Janitor has no dependable
-// hidden metadata channel: HTML comments can surface in rendered messages.
-// Chub and other generic clients keep the complete FF5 state stack.
+// Internal State prompt ids are retained as a named group for tests and future
+// profiles. Janitor now receives the complete stack through its Markdown
+// overrides; the response layer places the state record in a <think> block.
 var INTERNAL_STATE_PROMPT_IDS = [
     '019f62e8-892f-7021-97a6-42e1b83eaad3', // DnD Simulator
     '019f67b4-7381-7000-bcc4-496b2e6ed920', // Internal Agenda
@@ -163,7 +162,7 @@ var INTERNAL_STATE_PROMPT_IDS = [
 ];
 
 var PROMPT_EXCLUSIONS = {
-    janitor: INTERNAL_STATE_PROMPT_IDS
+    janitor: []
 };
 
 function getPresetForModel(nimModelId) {
@@ -323,13 +322,16 @@ function prepareFF5History(messages, dropAllInternalStates) {
         });
 
         var cleanedContent = runRegexScripts(message.content, applicable);
-        // Janitor no longer uses Internal States, so purge every state variant
-        // from old history. Generic clients retain the latest state for FF5
-        // continuity and prune older copies after two turns.
+        // Retain the newest state record for continuity and prune older copies
+        // after two turns. The optional hard-drop mode remains available for
+        // callers that explicitly need state-free history.
         if (dropAllInternalStates) {
             cleanedContent = stripInternalState(cleanedContent);
         } else if (depth >= 2) {
             cleanedContent = cleanedContent.replace(hiddenJanitorState, '');
+            cleanedContent = stripInternalState(cleanedContent);
+        } else {
+            cleanedContent = restoreJanitorStateForContext(cleanedContent);
         }
 
         return Object.assign({}, message, { content: cleanedContent });
@@ -368,6 +370,15 @@ function findInternalStateStart(input) {
     if (candidates.length === 0) return -1;
     var start = Math.min.apply(Math, candidates);
 
+    // When Janitor sends its Markdown state back inside a dedicated think
+    // block, include the opening marker in cleanup operations so old turns do
+    // not retain an orphaned <think> tag.
+    var thinkStart = text.toLowerCase().lastIndexOf(THINK_OPEN, start);
+    var thinkClose = text.toLowerCase().lastIndexOf(THINK_CLOSE, start);
+    if (thinkStart !== -1 && thinkStart > thinkClose && start - thinkStart <= 256) {
+        start = thinkStart;
+    }
+
     // Generic FF5 output wraps Internal States in GFX markers. Include the
     // opening wrapper in the hidden block, but do not consume unrelated phone,
     // terminal, letter, or map graphics.
@@ -386,6 +397,58 @@ function stripInternalState(input) {
 
     var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
     return narrative.trimEnd();
+}
+
+function normalizeJanitorInternalState(input) {
+    var state = String(input || '').trim();
+    if (!state) return '';
+
+    var body = state
+        .replace(/<think\b[^>]*>/gi, '')
+        .replace(/<\/think\s*>/gi, '')
+        .replace(/<!--\s*GFX_START\s*-->/gi, '')
+        .replace(/<!--\s*GFX_END\s*-->/gi, '')
+        .replace(/<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/gi, '')
+        .replace(/END[_\s-]*FF5[_\s-]*INTERNAL[_\s-]*STATE\s*-->/gi, '')
+        .replace(/<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary>/gi, '\n#### $1\n')
+        .replace(/<\/details>/gi, '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<b\b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+        .replace(/<\/?(?:internal[_\s-]*states?|pre|div|span|ul|li|p)\b[^>]*>/gi, '')
+        .replace(/<!--|-->/g, '')
+        .replace(/(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b[^\n]*/i, '')
+        .replace(/^\s*TURN:\s*(.+)$/gim, '**TURN:** $1')
+        .replace(/^\s*\[(NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)\]\s*$/gim, '#### $1')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+    if (!body) return '';
+    return '### INTERNAL STATES\n\n' + body;
+}
+
+function wrapJanitorInternalState(input) {
+    var markdown = normalizeJanitorInternalState(input);
+    return markdown ? THINK_OPEN + '\n' + markdown + '\n' + THINK_CLOSE : '';
+}
+
+function displayJanitorInternalState(input) {
+    var text = String(input || '');
+    var start = findInternalStateStart(text);
+    if (start === -1) return text;
+
+    var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
+    var state = wrapJanitorInternalState(text.slice(start));
+    return narrative.trimEnd() + (narrative.trim() && state ? '\n\n' : '') + state;
+}
+
+// Janitor hides the Markdown state in a think block for display. Before the
+// next model call, restore a semantic container so FF5 can reliably locate and
+// update the newest record without treating it as native chain-of-thought.
+function restoreJanitorStateForContext(input) {
+    return String(input || '').replace(
+        /<think\b[^>]*>\s*(###\s*INTERNAL\s+STATES[\s\S]*?)<\/think\s*>/gi,
+        '<internal_states>\n$1\n</internal_states>'
+    );
 }
 
 function escapeHtml(input) {
@@ -495,7 +558,7 @@ function createInternalStateStream(frontend) {
             }
 
             var state = frontend === 'janitor'
-                ? ''
+                ? wrapJanitorInternalState(stateBuffer)
                 : normalizeGenericInternalState(stateBuffer);
             stateBuffer = '';
             stateStarted = false;
@@ -824,7 +887,7 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
             var promptExclusions = PROMPT_EXCLUSIONS[frontend] || [];
-            var dropAllInternalStates = frontend === 'janitor';
+            var dropAllInternalStates = false;
             var sourceMessages = preset === PRESET_FRANKENSTEIN
                 ? prepareFF5History(messages, dropAllInternalStates)
                 : messages;
@@ -836,8 +899,8 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             );
             console.log('Preset applied: ' + preset.name + ' for model ' + nimModel + ' (frontend: ' + frontend + ')');
             console.log('   - Preset prompts injected: ' + (preset.prompts.length - promptExclusions.length));
-            if (dropAllInternalStates) {
-                console.log('   - Internal States: DISABLED for Janitor');
+            if (frontend === 'janitor') {
+                console.log('   - Internal States: ENABLED for Janitor (Markdown inside think block)');
             }
         } else {
             console.log('No preset available for model ' + nimModel + ', using raw messages');
@@ -1071,8 +1134,9 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             if (delta.content === '') return;
         }
 
-        // Hold a possible state tail until completion. Janitor drops it;
-        // generic clients receive one normalized visible FF5 panel.
+        // Hold a possible state tail until completion. Janitor receives a
+        // Markdown state record inside a think block; generic clients receive
+        // one normalized visible FF5 panel.
         if (internalStateStream) {
             // Native reasoning may discuss the phrase "Internal States" as
             // part of BOLT. Do not mistake displayed reasoning for the final
@@ -1255,7 +1319,7 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                 }
                 var cleanContent = cleanStructuredContent(rawContent);
                 var fullContent = frontend === 'janitor' && useFF5Display
-                    ? stripInternalState(cleanContent)
+                    ? displayJanitorInternalState(cleanContent)
                     : displayGenericInternalState(cleanContent, frontend, useFF5Display);
 
                 if (exposeReasoning && choice && choice.message && choice.message.reasoning_content) {
@@ -1325,6 +1389,10 @@ module.exports._test = {
     shouldShowReasoning: shouldShowReasoning,
     stripThinkBlocks: stripThinkBlocks,
     createThinkingStripStream: createThinkingStripStream,
+    normalizeJanitorInternalState: normalizeJanitorInternalState,
+    wrapJanitorInternalState: wrapJanitorInternalState,
+    displayJanitorInternalState: displayJanitorInternalState,
+    restoreJanitorStateForContext: restoreJanitorStateForContext,
     findInternalStateStart: findInternalStateStart,
     stripInternalState: stripInternalState,
     normalizeGenericInternalState: normalizeGenericInternalState,
