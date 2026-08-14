@@ -63,84 +63,11 @@ function isInklingModel(nimModelId) {
     return lower.indexOf('thinkingmachines') !== -1 || lower.indexOf('inkling') !== -1;
 }
 
-// Frontend is determined by which URL path the request came in on.
-// Dedicated routes let the proxy apply frontend-specific display rules without
-// relying on unstable User-Agent strings or client-controlled request bodies.
+// Frontend is determined by which URL path the request came in on
+// (Janitor AI's proxy field points at /janitor/v1/chat/completions).
 function detectFrontend(req) {
     if (req.path.indexOf('/janitor/') === 0) return 'janitor';
-    if (req.path.indexOf('/chub/') === 0) return 'chub';
     return 'default';
-}
-
-// Native thinking remains enabled upstream for every frontend. This controls
-// only whether the provider's reasoning trace is copied into the visible chat
-// response. Chub renders <think> blocks as ordinary text, so its dedicated
-// route always suppresses them even when SHOW_REASONING=true globally.
-function shouldShowReasoning(frontend) {
-    return SHOW_REASONING && frontend !== 'chub';
-}
-
-function stripThinkBlocks(input) {
-    var text = String(input || '');
-    return text
-        .replace(/<think\b[^>]*>[\s\S]*?<\/think\s*>/gi, '')
-        .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-        .replace(/^\s*<\/think\s*>/gi, '');
-}
-
-// Streaming equivalent of stripThinkBlocks. It recognizes markers split
-// across arbitrary SSE/network chunk boundaries and never buffers ordinary
-// narrative beyond the few characters needed to identify a possible marker.
-function createThinkingStripStream() {
-    var pending = '';
-    var insideThinking = false;
-    var openMarker = THINK_OPEN.toLowerCase();
-    var closeMarker = THINK_CLOSE.toLowerCase();
-
-    return {
-        push: function(chunk) {
-            pending += String(chunk || '');
-            var visible = '';
-
-            while (pending) {
-                var lower = pending.toLowerCase();
-
-                if (insideThinking) {
-                    var closeAt = lower.indexOf(closeMarker);
-                    if (closeAt === -1) {
-                        // Discard confirmed reasoning while retaining only a
-                        // possible partial closing marker.
-                        pending = pending.slice(Math.max(0, pending.length - (closeMarker.length - 1)));
-                        return visible;
-                    }
-
-                    pending = pending.slice(closeAt + closeMarker.length);
-                    insideThinking = false;
-                    continue;
-                }
-
-                var openAt = lower.indexOf(openMarker);
-                if (openAt === -1) {
-                    var safeLength = Math.max(0, pending.length - (openMarker.length - 1));
-                    visible += pending.slice(0, safeLength);
-                    pending = pending.slice(safeLength);
-                    return visible;
-                }
-
-                visible += pending.slice(0, openAt);
-                pending = pending.slice(openAt + openMarker.length);
-                insideThinking = true;
-            }
-
-            return visible;
-        },
-        finish: function() {
-            var remainder = insideThinking ? '' : pending;
-            pending = '';
-            insideThinking = false;
-            return remainder;
-        }
-    };
 }
 
 // Per-frontend content overrides, keyed by prompt identifier. Unlike a full
@@ -781,11 +708,7 @@ app.get('/v1/models', function(req, res) {
     res.json({ object: 'list', data: models });
 });
 
-app.post([
-    '/v1/chat/completions',
-    '/janitor/v1/chat/completions',
-    '/chub/v1/chat/completions'
-], async function(req, res) {
+app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async function(req, res) {
     try {
         var model = req.body.model;
         var messages = req.body.messages;
@@ -1006,15 +929,11 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var buffer = '';
     var partialData = '';
     var reasoningActive = false;
-    var exposeReasoning = shouldShowReasoning(frontend);
     var displayBuffer = '';
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
     var internalStateStream = useFF5Display
         ? createInternalStateStream(frontend)
-        : null;
-    var thinkingStripStream = frontend === 'chub'
-        ? createThinkingStripStream()
         : null;
 
     function safeWrite(obj) {
@@ -1031,16 +950,11 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
         var isReasoningDelta = false;
 
-        var reasoning = delta.reasoning_content;
-        var content = delta.content;
+        if (SHOW_REASONING) {
+            var reasoning = delta.reasoning_content;
+            var content = delta.content;
 
-        if (reasoning) {
-            // Consume the provider-specific field in both modes. When exposed,
-            // convert it into portable <think> content. When hidden, drop the
-            // delta unless it also contains final-answer content.
-            delete delta.reasoning_content;
-
-            if (exposeReasoning) {
+            if (reasoning) {
                 isReasoningDelta = true;
                 var cleanReasoning = cleanStructuredContent(reasoning);
                 if (reasoningActive) {
@@ -1049,19 +963,16 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
                     delta.content = '\u003Cthink\u003E\n' + cleanReasoning;
                     reasoningActive = true;
                 }
+                delete delta.reasoning_content;
             } else if (content) {
-                delta.content = cleanStructuredContent(content);
+                var cleanContent = cleanStructuredContent(content);
+                if (reasoningActive) {
+                    delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
+                    reasoningActive = false;
+                } else {
+                    delta.content = cleanContent;
+                }
             }
-        } else if (content) {
-            var cleanContent = cleanStructuredContent(content);
-            if (exposeReasoning && reasoningActive) {
-                delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
-                reasoningActive = false;
-            } else {
-                delta.content = cleanContent;
-            }
-        } else if (!exposeReasoning && delta.reasoning_content !== undefined) {
-            delete delta.reasoning_content;
         }
 
         // FIX 4: Allow the initial role chunk through to start UI sequence
@@ -1071,14 +982,6 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
         if (delta.content === null || delta.content === undefined) {
             return;
-        }
-
-        // NVIDIA normally returns GLM reasoning via reasoning_content. Strip
-        // literal fallback tags too so a parser regression cannot leak them
-        // into Chub's visible response.
-        if (thinkingStripStream) {
-            delta.content = thinkingStripStream.push(delta.content);
-            if (delta.content === '') return;
         }
 
         // Hold a possible state tail until completion. Janitor drops it;
@@ -1190,24 +1093,6 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             processData(buffer.slice(6));
         }
 
-        // Flush a short non-reasoning tail held only to identify a split
-        // <think> marker, then pass it through the normal state/display path.
-        if (thinkingStripStream) {
-            var thinkRemainder = thinkingStripStream.finish();
-            if (thinkRemainder) {
-                if (internalStateStream) {
-                    thinkRemainder = internalStateStream.push(thinkRemainder);
-                }
-                if (thinkRemainder) {
-                    if (useFF5Display && frontend !== 'janitor') {
-                        displayBuffer += thinkRemainder;
-                    } else {
-                        safeWrite({ choices: [{ delta: { content: thinkRemainder } }] });
-                    }
-                }
-            }
-        }
-
         if (internalStateStream) {
             var stateRemainder = internalStateStream.finish();
             if (stateRemainder) {
@@ -1228,7 +1113,7 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             displayBuffer = '';
         }
 
-        if (exposeReasoning && reasoningActive) {
+        if (reasoningActive) {
             safeWrite({
                 choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
             });
@@ -1252,7 +1137,6 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
 function handleNonStream(data, model, res, frontend, useFF5Display) {
     try {
-        var exposeReasoning = shouldShowReasoning(frontend);
         var openaiResponse = {
             id: 'chatcmpl-' + Date.now(),
             object: 'chat.completion',
@@ -1260,15 +1144,12 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
             model: model,
             choices: (data.choices || []).map(function(choice, index) {
                 var rawContent = (choice && choice.message && choice.message.content) || '';
-                if (frontend === 'chub') {
-                    rawContent = stripThinkBlocks(rawContent);
-                }
                 var cleanContent = cleanStructuredContent(rawContent);
                 var fullContent = frontend === 'janitor' && useFF5Display
                     ? stripInternalState(cleanContent)
                     : displayGenericInternalState(cleanContent, frontend, useFF5Display);
 
-                if (exposeReasoning && choice && choice.message && choice.message.reasoning_content) {
+                if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
                     var rawReasoning = choice.message.reasoning_content;
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
@@ -1332,9 +1213,6 @@ if (require.main === module) {
 module.exports = app;
 module.exports._test = {
     detectFrontend: detectFrontend,
-    shouldShowReasoning: shouldShowReasoning,
-    stripThinkBlocks: stripThinkBlocks,
-    createThinkingStripStream: createThinkingStripStream,
     findInternalStateStart: findInternalStateStart,
     stripInternalState: stripInternalState,
     normalizeGenericInternalState: normalizeGenericInternalState,
