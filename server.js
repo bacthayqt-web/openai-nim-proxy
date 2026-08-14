@@ -70,6 +70,73 @@ function detectFrontend(req) {
     return 'default';
 }
 
+// SHOW_REASONING is intentionally scoped to the Janitor endpoint. Native
+// thinking can stay enabled for every request, but generic clients receive
+// only the final answer even when reasoning display is enabled globally.
+function shouldShowReasoning(frontend) {
+    return SHOW_REASONING && frontend === 'janitor';
+}
+
+function stripThinkBlocks(input) {
+    var text = String(input || '');
+    return text
+        .replace(/<think\b[^>]*>[\s\S]*?<\/think\s*>/gi, '')
+        .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+        .replace(/^\s*<\/think\s*>/gi, '');
+}
+
+// Streaming equivalent of stripThinkBlocks. It handles markers split across
+// arbitrary SSE/network chunk boundaries without buffering normal narrative.
+function createThinkingStripStream() {
+    var pending = '';
+    var insideThinking = false;
+    var openMarker = THINK_OPEN.toLowerCase();
+    var closeMarker = THINK_CLOSE.toLowerCase();
+
+    return {
+        push: function(chunk) {
+            pending += String(chunk || '');
+            var visible = '';
+
+            while (pending) {
+                var lower = pending.toLowerCase();
+
+                if (insideThinking) {
+                    var closeAt = lower.indexOf(closeMarker);
+                    if (closeAt === -1) {
+                        pending = pending.slice(Math.max(0, pending.length - (closeMarker.length - 1)));
+                        return visible;
+                    }
+
+                    pending = pending.slice(closeAt + closeMarker.length);
+                    insideThinking = false;
+                    continue;
+                }
+
+                var openAt = lower.indexOf(openMarker);
+                if (openAt === -1) {
+                    var safeLength = Math.max(0, pending.length - (openMarker.length - 1));
+                    visible += pending.slice(0, safeLength);
+                    pending = pending.slice(safeLength);
+                    return visible;
+                }
+
+                visible += pending.slice(0, openAt);
+                pending = pending.slice(openAt + openMarker.length);
+                insideThinking = true;
+            }
+
+            return visible;
+        },
+        finish: function() {
+            var remainder = insideThinking ? '' : pending;
+            pending = '';
+            insideThinking = false;
+            return remainder;
+        }
+    };
+}
+
 // Per-frontend content overrides, keyed by prompt identifier. Unlike a full
 // duplicated preset, this only swaps individual prompt entries (e.g. Janitor
 // can't render raw inline HTML, so it gets a markdown-fenced version of just
@@ -668,6 +735,7 @@ app.get('/health', function(req, res) {
     res.json({
         status: 'ok',
         reasoning_display: SHOW_REASONING,
+        reasoning_display_scope: SHOW_REASONING ? 'janitor_only' : 'disabled',
         thinking_mode: ENABLE_THINKING_MODE,
         timeout_seconds: REQUEST_TIMEOUT / 1000,
         providers: {
@@ -929,11 +997,15 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var buffer = '';
     var partialData = '';
     var reasoningActive = false;
+    var exposeReasoning = shouldShowReasoning(frontend);
     var displayBuffer = '';
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
     var internalStateStream = useFF5Display
         ? createInternalStateStream(frontend)
+        : null;
+    var thinkingStripStream = !exposeReasoning
+        ? createThinkingStripStream()
         : null;
 
     function safeWrite(obj) {
@@ -950,11 +1022,15 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
         var isReasoningDelta = false;
 
-        if (SHOW_REASONING) {
-            var reasoning = delta.reasoning_content;
-            var content = delta.content;
+        var reasoning = delta.reasoning_content;
+        var content = delta.content;
 
-            if (reasoning) {
+        if (reasoning) {
+            // Consume reasoning_content in both modes. Janitor receives it as
+            // portable <think> text; every other frontend drops it completely.
+            delete delta.reasoning_content;
+
+            if (exposeReasoning) {
                 isReasoningDelta = true;
                 var cleanReasoning = cleanStructuredContent(reasoning);
                 if (reasoningActive) {
@@ -963,16 +1039,19 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
                     delta.content = '\u003Cthink\u003E\n' + cleanReasoning;
                     reasoningActive = true;
                 }
-                delete delta.reasoning_content;
             } else if (content) {
-                var cleanContent = cleanStructuredContent(content);
-                if (reasoningActive) {
-                    delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
-                    reasoningActive = false;
-                } else {
-                    delta.content = cleanContent;
-                }
+                delta.content = cleanStructuredContent(content);
             }
+        } else if (content) {
+            var cleanContent = cleanStructuredContent(content);
+            if (exposeReasoning && reasoningActive) {
+                delta.content = '\n\u003C/think\u003E\n\n' + cleanContent;
+                reasoningActive = false;
+            } else {
+                delta.content = cleanContent;
+            }
+        } else if (!exposeReasoning && delta.reasoning_content !== undefined) {
+            delete delta.reasoning_content;
         }
 
         // FIX 4: Allow the initial role chunk through to start UI sequence
@@ -982,6 +1061,14 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
         if (delta.content === null || delta.content === undefined) {
             return;
+        }
+
+        // Some providers may return literal <think> tags in content instead
+        // of reasoning_content. Strip that fallback from every non-Janitor
+        // response, including tags split across stream chunks.
+        if (thinkingStripStream) {
+            delta.content = thinkingStripStream.push(delta.content);
+            if (delta.content === '') return;
         }
 
         // Hold a possible state tail until completion. Janitor drops it;
@@ -1093,6 +1180,24 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             processData(buffer.slice(6));
         }
 
+        // Flush a short visible tail retained only to detect a split <think>
+        // marker, then pass it through the existing state/display pipeline.
+        if (thinkingStripStream) {
+            var thinkRemainder = thinkingStripStream.finish();
+            if (thinkRemainder) {
+                if (internalStateStream) {
+                    thinkRemainder = internalStateStream.push(thinkRemainder);
+                }
+                if (thinkRemainder) {
+                    if (useFF5Display && frontend !== 'janitor') {
+                        displayBuffer += thinkRemainder;
+                    } else {
+                        safeWrite({ choices: [{ delta: { content: thinkRemainder } }] });
+                    }
+                }
+            }
+        }
+
         if (internalStateStream) {
             var stateRemainder = internalStateStream.finish();
             if (stateRemainder) {
@@ -1113,7 +1218,7 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             displayBuffer = '';
         }
 
-        if (reasoningActive) {
+        if (exposeReasoning && reasoningActive) {
             safeWrite({
                 choices: [{ delta: { content: '\n\u003C/think\u003E' } }]
             });
@@ -1137,6 +1242,7 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
 function handleNonStream(data, model, res, frontend, useFF5Display) {
     try {
+        var exposeReasoning = shouldShowReasoning(frontend);
         var openaiResponse = {
             id: 'chatcmpl-' + Date.now(),
             object: 'chat.completion',
@@ -1144,12 +1250,15 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
             model: model,
             choices: (data.choices || []).map(function(choice, index) {
                 var rawContent = (choice && choice.message && choice.message.content) || '';
+                if (!exposeReasoning) {
+                    rawContent = stripThinkBlocks(rawContent);
+                }
                 var cleanContent = cleanStructuredContent(rawContent);
                 var fullContent = frontend === 'janitor' && useFF5Display
                     ? stripInternalState(cleanContent)
                     : displayGenericInternalState(cleanContent, frontend, useFF5Display);
 
-                if (SHOW_REASONING && choice && choice.message && choice.message.reasoning_content) {
+                if (exposeReasoning && choice && choice.message && choice.message.reasoning_content) {
                     var rawReasoning = choice.message.reasoning_content;
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
@@ -1213,6 +1322,9 @@ if (require.main === module) {
 module.exports = app;
 module.exports._test = {
     detectFrontend: detectFrontend,
+    shouldShowReasoning: shouldShowReasoning,
+    stripThinkBlocks: stripThinkBlocks,
+    createThinkingStripStream: createThinkingStripStream,
     findInternalStateStart: findInternalStateStart,
     stripInternalState: stripInternalState,
     normalizeGenericInternalState: normalizeGenericInternalState,
