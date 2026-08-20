@@ -36,7 +36,7 @@ var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
 var FF5_REGEX = loadPreset('ff5-regex') || [];
 
 var MODEL_MAPPING = {
-    'gpt-3.5-turbo': 'moonshotai/kimi-k2.6',
+    'gpt-3.5-turbo': 'moonshotai/kimi-k3',
     'gpt-4': 'z-ai/glm-5.2',
     'gpt-4-turbo': 'thinkingmachines/inkling',
     'gpt-4o': 'deepseek-ai/deepseek-v4-pro',
