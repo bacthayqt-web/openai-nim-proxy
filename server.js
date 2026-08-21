@@ -326,7 +326,7 @@ var PROMPT_OVERRIDES = {
 };
 
 // Internal State prompt ids are retained as a named group for tests and future
-// profiles. Janitor now receives the complete stack through its Markdown
+// profiles. Janitor receives the complete stack through its Markdown
 // overrides; the response layer places the state record in a <think> block.
 var INTERNAL_STATE_PROMPT_IDS = [
     '019f62e8-892f-7021-97a6-42e1b83eaad3', // DnD Simulator
@@ -479,7 +479,9 @@ function runRegexScripts(text, scripts) {
     return output;
 }
 
-function prepareFF5History(messages, dropAllInternalStates) {
+function prepareFF5History(messages, dropAllInternalStates, frontend) {
+    frontend = frontend || 'default';
+
     var cleanupScripts = FF5_REGEX.filter(function(script) {
         // These are the machine-tag/context cleanup rules. Relationship-bar
         // styling is intentionally excluded from model context.
@@ -501,16 +503,20 @@ function prepareFF5History(messages, dropAllInternalStates) {
         });
 
         var cleanedContent = runRegexScripts(message.content, applicable);
-        // Retain the newest state record for continuity and prune older copies
-        // after two turns. The optional hard-drop mode remains available for
-        // callers that explicitly need state-free history.
+
+        // Retain only the newest state record for continuity. Crucially, the
+        // retained record is normalized for the frontend that is making THIS
+        // request. That prevents a Janitor Markdown state from teaching a
+        // generic/Chub request to keep emitting Markdown on later turns.
         if (dropAllInternalStates) {
             cleanedContent = stripInternalState(cleanedContent);
         } else if (depth >= 2) {
             cleanedContent = cleanedContent.replace(hiddenJanitorState, '');
             cleanedContent = stripInternalState(cleanedContent);
-        } else {
+        } else if (frontend === 'janitor') {
             cleanedContent = restoreJanitorStateForContext(cleanedContent);
+        } else {
+            cleanedContent = restoreGenericStateForContext(cleanedContent);
         }
 
         return Object.assign({}, message, { content: cleanedContent });
@@ -548,15 +554,6 @@ function findInternalStateStart(input) {
 
     if (candidates.length === 0) return -1;
     var start = Math.min.apply(Math, candidates);
-
-    // When Janitor sends its Markdown state back inside a dedicated think
-    // block, include the opening marker in cleanup operations so old turns do
-    // not retain an orphaned <think> tag.
-    var thinkStart = text.toLowerCase().lastIndexOf(THINK_OPEN, start);
-    var thinkClose = text.toLowerCase().lastIndexOf(THINK_CLOSE, start);
-    if (thinkStart !== -1 && thinkStart > thinkClose && start - thinkStart <= 256) {
-        start = thinkStart;
-    }
 
     // Generic FF5 output wraps Internal States in GFX markers. Include the
     // opening wrapper in the hidden block, but do not consume unrelated phone,
@@ -637,13 +634,159 @@ function escapeHtml(input) {
         .replace(/>/g, '&gt;');
 }
 
+var GENERIC_STATE_SECTION_META = [
+    { names: ['NPC AGENDAS', 'NPC AGENDA'], summary: '👤 NPC AGENDAS' },
+    { names: ['NPC LOCATIONS', 'NPC LOCATION'], summary: '👤 NPC LOCATIONS' },
+    { names: ['FACTIONS', 'FACTION'], summary: '🏳️ FACTIONS' },
+    { names: ['BONDS', 'BOND TRACKER', 'RELATIONSHIPS'], summary: '💚 BONDS' },
+    { names: ['QUESTS', 'QUEST'], summary: '📜 QUESTS' },
+    { names: ['INVENTORY, FEATS & TITLES', 'INVENTORY, FEATS AND TITLES', 'INV & SKILLS', 'INVENTORY & STATUS', 'INVENTORY'], summary: '🎒 INVENTORY, FEATS & TITLES' },
+    { names: ["CHEKHOV'S GUN", 'CHEKHOV GUN', 'CHEKHOV SEEDS'], summary: "🔫 CHEKHOV'S GUN" },
+    { names: ['INTERNAL THOUGHTS', 'NPC THOUGHTS'], summary: '🧠 INTERNAL THOUGHTS' },
+    { names: ["GM'S NOTEBOOK", 'GM NOTEBOOK'], summary: "📓 GM'S NOTEBOOK" },
+    { names: ['DND TASK SIM', 'DND SIM', 'DND SIMULATOR'], summary: '🎲 DND TASK SIM' },
+    { names: ['WORLD SIM', 'WORLD SIMULATOR'], summary: '🌎 WORLD SIM' },
+    { names: ['PHYSICS, ENGINE & WORLD', 'PHYSICS, ENGINE AND WORLD', 'PHYSICS & WORLD'], summary: '🌌 PHYSICS, ENGINE & WORLD' }
+];
+
+function identifyGenericStateSection(line) {
+    var cleaned = String(line || '')
+        .replace(/^\s*#{1,6}\s*/, '')
+        .replace(/^\s*(?:\*\*|__)/, '')
+        .replace(/(?:\*\*|__)\s*$/, '')
+        .replace(/^\s*\[/, '')
+        .replace(/\]\s*$/, '')
+        .trim()
+        .toUpperCase();
+
+    // Strip leading emoji/punctuation without damaging apostrophes/ampersands
+    // inside the actual section name.
+    cleaned = cleaned.replace(/^[^A-Z0-9]+/, '').trim();
+
+    for (var i = 0; i < GENERIC_STATE_SECTION_META.length; i++) {
+        var meta = GENERIC_STATE_SECTION_META[i];
+        for (var j = 0; j < meta.names.length; j++) {
+            var candidate = meta.names[j].toUpperCase();
+            if (cleaned === candidate || cleaned.indexOf(candidate) === 0) {
+                return meta;
+            }
+        }
+    }
+    return null;
+}
+
+function stateMarkdownLinesToHtml(lines) {
+    var body = (lines || []).join('\n').trim();
+    if (!body) return 'None';
+
+    return body
+        .replace(/^\s*```(?:text|markdown|html)?\s*$/gim, '')
+        .replace(/^\s*```\s*$/gim, '')
+        .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+        .replace(/__([^_\n]+)__/g, '<b>$1</b>')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function buildGenericInternalStateFromText(input) {
+    var body = String(input || '')
+        .replace(/<think\b[^>]*>/gi, '')
+        .replace(/<\/think\s*>/gi, '')
+        .replace(/<!--\s*GFX_START\s*-->/gi, '')
+        .replace(/<!--\s*GFX_END\s*-->/gi, '')
+        .replace(/<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/gi, '')
+        .replace(/END[_\s-]*FF5[_\s-]*INTERNAL[_\s-]*STATE\s*-->/gi, '')
+        .replace(/<\/?internal[_\s-]*states?\b[^>]*>/gi, '')
+        .replace(/<!--|-->/g, '')
+        .trim();
+
+    if (!body) return '';
+
+    var turn = '';
+    var turnMatch = /(?:\*\*)?TURN:\s*([^\n*<]+)/i.exec(body) || /INTERNAL\s+STATES?\s*\(\s*Turn:\s*([^\)\n]+)\)/i.exec(body);
+    if (turnMatch) turn = turnMatch[1].trim();
+
+    var sections = [];
+    var current = null;
+    var preamble = [];
+    var lines = body.split(/\r?\n/);
+
+    lines.forEach(function(line) {
+        var trimmed = line.trim();
+        if (!trimmed) {
+            if (current) current.lines.push('');
+            return;
+        }
+
+        // Ignore the master heading/turn line; the outer <summary> restores it.
+        if (/^(?:#{1,6}\s*)?(?:\*\*|__)?(?:🎬\s*)?INTERNAL\s+STATES?\b/i.test(trimmed)) return;
+        if (/^(?:\*\*)?TURN:\s*/i.test(trimmed)) return;
+
+        var meta = identifyGenericStateSection(trimmed);
+        if (meta) {
+            current = { meta: meta, lines: [] };
+            sections.push(current);
+            return;
+        }
+
+        if (current) current.lines.push(line);
+        else preamble.push(line);
+    });
+
+    // If the model produced recognizable Markdown sections, rebuild the same
+    // nested <details> hierarchy used by the original FF5 preset. This allows
+    // the normal FF5 regex suite to restore its colors, menus and relationship
+    // graphics instead of showing a plaintext <pre> fallback.
+    if (sections.length > 0) {
+        var outerSummary = '🎬 INTERNAL STATES' + (turn ? ' (Turn: ' + turn + ')' : '');
+        var out = [
+            '<!-- GFX_START -->',
+            '<internal_states>',
+            '<details>',
+            '<summary>' + outerSummary + '</summary>'
+        ];
+
+        if (preamble.join('').trim()) {
+            out.push(stateMarkdownLinesToHtml(preamble));
+        }
+
+        sections.forEach(function(section) {
+            out.push('');
+            out.push('<details>');
+            out.push('<summary>' + section.meta.summary + '</summary>');
+            out.push(stateMarkdownLinesToHtml(section.lines));
+            out.push('</details>');
+        });
+
+        out.push('</details>');
+        out.push('</internal_states>');
+        out.push('<!-- GFX_END -->');
+        return out.join('\n');
+    }
+
+    // Last-resort compatibility panel for malformed state records. This is
+    // intentionally only used when no known FF5 section can be recovered.
+    return '<!-- GFX_START -->\n' +
+        '<internal_states>\n' +
+        '<details>\n' +
+        '<summary>🎬 INTERNAL STATES</summary>\n' +
+        '<pre style="white-space:pre-wrap;margin:0;">' + escapeHtml(body) + '</pre>\n' +
+        '</details>\n' +
+        '</internal_states>\n' +
+        '<!-- GFX_END -->';
+}
+
 function normalizeGenericInternalState(input) {
     var state = String(input || '').trim();
     if (!state) return '';
 
-    // Preserve the full native FF5 hierarchy when the model followed the
-    // generic HTML template, adding wrappers only if they were omitted.
+    // Preserve native FF5 hierarchy when the model followed the generic HTML
+    // template. Only add missing outer GFX markers.
     if (/<internal[_\s-]*states?\b/i.test(state) && /<details\b/i.test(state)) {
+        state = state
+            .replace(/<think\b[^>]*>/gi, '')
+            .replace(/<\/think\s*>/gi, '')
+            .trim();
         if (state.indexOf('<!-- GFX_START -->') === -1) {
             state = '<!-- GFX_START -->\n' + state;
         }
@@ -653,28 +796,17 @@ function normalizeGenericInternalState(input) {
         return state;
     }
 
-    // If a model emits Janitor-style comments or Markdown despite using the
-    // generic route, convert it into one visible, collapsible fallback panel.
-    var body = state
-        .replace(/<!--\s*GFX_START\s*-->/gi, '')
-        .replace(/<!--\s*GFX_END\s*-->/gi, '')
-        .replace(/<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/gi, '')
-        .replace(/END[_\s-]*FF5[_\s-]*INTERNAL[_\s-]*STATE\s*-->/gi, '')
-        .replace(/<\/?internal[_\s-]*states?\b[^>]*>/gi, '')
-        .replace(/(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b[^\n]*/i, '')
-        .replace(/<!--|-->/g, '')
-        .trim();
+    return buildGenericInternalStateFromText(state);
+}
 
-    if (!body) return '';
+function restoreGenericStateForContext(input) {
+    var text = String(input || '');
+    var start = findInternalStateStart(text);
+    if (start === -1) return text;
 
-    return '<!-- GFX_START -->\n' +
-        '<internal_states>\n' +
-        '<details>\n' +
-        '<summary>🎬 INTERNAL STATES</summary>\n' +
-        '<pre style="white-space:pre-wrap;margin:0;">' + escapeHtml(body) + '</pre>\n' +
-        '</details>\n' +
-        '</internal_states>\n' +
-        '<!-- GFX_END -->';
+    var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n').trimEnd();
+    var state = normalizeGenericInternalState(text.slice(start));
+    return narrative + (narrative && state ? '\n\n' : '') + state;
 }
 
 function displayGenericInternalState(input, frontend, enabled) {
@@ -843,8 +975,8 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         role: 'system',
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
-                ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences.'
-                : '\n\nJANITOR RENDERING: Use Markdown for the visible narrative and Pop-in Graphics. Internal States are disabled. Never generate an Internal States record, state heading, state XML, hidden state comment, or GFX-wrapped state panel. Never output visible raw HTML, CSS, details/summary tags, or GFX wrapper comments.')
+                ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences. INTERNAL STATE FORMAT LOCK: Always use the preset\'s native <internal_states> + nested <details>/<summary> HTML structure, even if older assistant messages contain Markdown state headings. Never imitate Markdown Internal States on generic/Chub clients.'
+                : '\n\nJANITOR RENDERING: Use Markdown for visible narrative, Pop-in Graphics, and the Internal States format supplied by the Janitor overrides. Never output raw HTML/CSS/details tags for Janitor. Append the complete Markdown Internal States record at the end; the server will place that record inside a <think> block for display.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -1123,7 +1255,7 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             var promptExclusions = PROMPT_EXCLUSIONS[frontend] || [];
             var dropAllInternalStates = false;
             var sourceMessages = preset === PRESET_FRANKENSTEIN
-                ? prepareFF5History(messages, dropAllInternalStates)
+                ? prepareFF5History(messages, dropAllInternalStates, frontend)
                 : messages;
             processedMessages = buildOrderedMessagesFromPreset(
                 preset,
@@ -1135,6 +1267,8 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             console.log('   - Preset prompts injected: ' + (preset.prompts.length - promptExclusions.length));
             if (frontend === 'janitor') {
                 console.log('   - Internal States: ENABLED for Janitor (Markdown inside think block)');
+            } else {
+                console.log('   - Internal States: generic FF5 HTML format locked');
             }
         } else {
             console.log('No preset available for model ' + nimModel + ', using raw messages');
@@ -1593,6 +1727,7 @@ module.exports._test = {
     findInternalStateStart: findInternalStateStart,
     stripInternalState: stripInternalState,
     normalizeGenericInternalState: normalizeGenericInternalState,
+    restoreGenericStateForContext: restoreGenericStateForContext,
     displayGenericInternalState: displayGenericInternalState,
     hideJanitorInternalState: hideJanitorInternalState,
     createJanitorStateStream: createJanitorStateStream,
