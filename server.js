@@ -10,6 +10,8 @@ var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com
 var NIM_API_KEY = process.env.NIM_API_KEY;
 var SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
+var REASONING_EFFORT = normalizeReasoningEffort(process.env.REASONING_EFFORT, 'high');
+var REASONING_BUDGET = parsePositiveInteger(process.env.REASONING_BUDGET);
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
 var MAX_TEMPERATURE = 2.0;
 var MAX_MAX_TOKENS = 128000;
@@ -63,6 +65,161 @@ function isInklingModel(nimModelId) {
     return lower.indexOf('thinkingmachines') !== -1 || lower.indexOf('inkling') !== -1;
 }
 
+function normalizeReasoningEffort(value, fallback) {
+    var normalized = String(value || '').trim().toLowerCase();
+    var allowed = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+    if (allowed.indexOf(normalized) !== -1) return normalized;
+    return fallback || 'high';
+}
+
+function parsePositiveInteger(value) {
+    if (value === undefined || value === null || value === '') return undefined;
+    var parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function optionalBoolean(value) {
+    if (value === true || value === 'true' || value === 1 || value === '1') return true;
+    if (value === false || value === 'false' || value === 0 || value === '0') return false;
+    return undefined;
+}
+
+function getThinkingProfile(nimModelId) {
+    var lower = String(nimModelId || '').toLowerCase();
+
+    // Order matters: Inkling's provider name contains "thinking", while its
+    // API uses an effort enum rather than either boolean toggle.
+    if (isInklingModel(lower)) return 'inkling';
+    if (lower.indexOf('deepseek-v4') !== -1) return 'deepseek-v4';
+    if (lower.indexOf('deepseek') !== -1) return 'native-reasoning';
+    if (lower.indexOf('glm') !== -1) return 'enable-thinking';
+    if (isKimiModel(lower)) return 'thinking';
+    if (lower.indexOf('qwen') !== -1 || lower.indexOf('qwq') !== -1) return 'qwen';
+    if (lower.indexOf('nemotron') !== -1) return 'nemotron';
+    if (lower.indexOf('minimax') !== -1) return 'native-reasoning';
+    if (lower.indexOf('reasoning') !== -1 || /(?:^|[/_-])r1(?:$|[/_-])/.test(lower)) {
+        return 'native-reasoning';
+    }
+    return 'none';
+}
+
+function copySafeChatTemplateKwargs(source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+    var safeKeys = [
+        'thinking',
+        'enable_thinking',
+        'reasoning_effort',
+        'clear_thinking',
+        'preserve_thinking',
+        'force_nonempty_content',
+        'medium_effort'
+    ];
+    var result = {};
+    safeKeys.forEach(function(key) {
+        if (source[key] !== undefined) result[key] = source[key];
+    });
+    return result;
+}
+
+// Translate the proxy's one universal thinking switch into the dialect used
+// by each model family. Client-provided recognized options are accepted as
+// per-request overrides, including SDK-style extra_body input sent literally
+// by less conventional OpenAI-compatible clients.
+function buildThinkingConfig(nimModelId, requestBody, defaults) {
+    requestBody = requestBody || {};
+    defaults = defaults || {};
+
+    var profile = getThinkingProfile(nimModelId);
+    var extraBody = requestBody.extra_body && typeof requestBody.extra_body === 'object'
+        ? requestBody.extra_body
+        : {};
+    var clientKwargs = Object.assign(
+        {},
+        copySafeChatTemplateKwargs(extraBody.chat_template_kwargs),
+        copySafeChatTemplateKwargs(requestBody.chat_template_kwargs)
+    );
+
+    var enabled = defaults.enabled !== undefined
+        ? !!defaults.enabled
+        : ENABLE_THINKING_MODE;
+    var requestedEnabled = optionalBoolean(requestBody.thinking);
+    if (requestedEnabled === undefined) requestedEnabled = optionalBoolean(requestBody.enable_thinking);
+    if (requestedEnabled === undefined) requestedEnabled = optionalBoolean(clientKwargs.thinking);
+    if (requestedEnabled === undefined) requestedEnabled = optionalBoolean(clientKwargs.enable_thinking);
+    if (requestedEnabled !== undefined) enabled = requestedEnabled;
+
+    var effort = normalizeReasoningEffort(
+        requestBody.reasoning_effort !== undefined
+            ? requestBody.reasoning_effort
+            : clientKwargs.reasoning_effort,
+        defaults.effort || REASONING_EFFORT
+    );
+    var budget = parsePositiveInteger(
+        requestBody.reasoning_budget !== undefined
+            ? requestBody.reasoning_budget
+            : extraBody.reasoning_budget
+    );
+    if (budget === undefined) {
+        budget = defaults.budget !== undefined ? defaults.budget : REASONING_BUDGET;
+    }
+
+    var kwargs = clientKwargs;
+    var topLevel = {};
+
+    if (profile === 'deepseek-v4') {
+        delete kwargs.enable_thinking;
+        kwargs.thinking = enabled;
+        if (enabled) kwargs.reasoning_effort = effort === 'xhigh' ? 'max' : effort;
+        else delete kwargs.reasoning_effort;
+    } else if (profile === 'enable-thinking') {
+        delete kwargs.thinking;
+        delete kwargs.reasoning_effort;
+        kwargs.enable_thinking = enabled;
+    } else if (profile === 'thinking') {
+        delete kwargs.enable_thinking;
+        delete kwargs.reasoning_effort;
+        kwargs.thinking = enabled;
+    } else if (profile === 'qwen') {
+        delete kwargs.thinking;
+        delete kwargs.reasoning_effort;
+        kwargs.enable_thinking = enabled;
+        if (enabled) topLevel.reasoning_effort = effort;
+    } else if (profile === 'nemotron') {
+        delete kwargs.thinking;
+        delete kwargs.reasoning_effort;
+        kwargs.enable_thinking = enabled;
+        if (enabled && budget !== undefined) topLevel.reasoning_budget = budget;
+    } else if (profile === 'inkling') {
+        delete kwargs.thinking;
+        delete kwargs.enable_thinking;
+        kwargs.reasoning_effort = enabled ? effort : 'none';
+    } else if (profile === 'native-reasoning') {
+        // These models reason natively and may reject invented template flags.
+        // Forward only recognized client options when the caller supplied them.
+    }
+
+    if (Object.keys(kwargs).length === 0) kwargs = undefined;
+
+    return {
+        profile: profile,
+        enabled: enabled,
+        effort: effort,
+        chat_template_kwargs: kwargs,
+        top_level: topLevel
+    };
+}
+
+function applyThinkingConfig(nimRequest, nimModelId, requestBody, defaults) {
+    var config = buildThinkingConfig(nimModelId, requestBody, defaults);
+    if (config.chat_template_kwargs) {
+        nimRequest.chat_template_kwargs = config.chat_template_kwargs;
+    }
+    Object.keys(config.top_level).forEach(function(key) {
+        nimRequest[key] = config.top_level[key];
+    });
+    return config;
+}
+
 // Frontend is determined by which URL path the request came in on
 // (Janitor AI's proxy field points at /janitor/v1/chat/completions).
 function detectFrontend(req) {
@@ -80,18 +237,35 @@ function shouldShowReasoning(frontend) {
 function stripThinkBlocks(input) {
     var text = String(input || '');
     return text
-        .replace(/<think\b[^>]*>[\s\S]*?<\/think\s*>/gi, '')
-        .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-        .replace(/^\s*<\/think\s*>/gi, '');
+        .replace(/<(think|thinking|reasoning|analysis)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+        .replace(/<(think|thinking|reasoning|analysis)\b[^>]*>[\s\S]*$/gi, '')
+        .replace(/^\s*<\/(?:think|thinking|reasoning|analysis)\s*>/gi, '');
 }
 
 // Streaming equivalent of stripThinkBlocks. It handles markers split across
 // arbitrary SSE/network chunk boundaries without buffering normal narrative.
 function createThinkingStripStream() {
     var pending = '';
-    var insideThinking = false;
-    var openMarker = THINK_OPEN.toLowerCase();
-    var closeMarker = THINK_CLOSE.toLowerCase();
+    var closeMarker = null;
+    var tagNames = ['think', 'thinking', 'reasoning', 'analysis'];
+
+    function findOpenTag(text) {
+        var match = /<(think|thinking|reasoning|analysis)\b[^>]*>/i.exec(text);
+        if (!match) return null;
+        return { index: match.index, length: match[0].length, name: match[1].toLowerCase() };
+    }
+
+    function possibleOpenSuffixStart(text) {
+        var lower = text.toLowerCase();
+        var start = lower.lastIndexOf('<');
+        if (start === -1) return -1;
+        var suffix = lower.slice(start);
+        for (var i = 0; i < tagNames.length; i++) {
+            var prefix = '<' + tagNames[i];
+            if (prefix.indexOf(suffix) === 0 || suffix.indexOf(prefix) === 0) return start;
+        }
+        return -1;
+    }
 
     return {
         push: function(chunk) {
@@ -101,7 +275,7 @@ function createThinkingStripStream() {
             while (pending) {
                 var lower = pending.toLowerCase();
 
-                if (insideThinking) {
+                if (closeMarker) {
                     var closeAt = lower.indexOf(closeMarker);
                     if (closeAt === -1) {
                         pending = pending.slice(Math.max(0, pending.length - (closeMarker.length - 1)));
@@ -109,29 +283,34 @@ function createThinkingStripStream() {
                     }
 
                     pending = pending.slice(closeAt + closeMarker.length);
-                    insideThinking = false;
+                    closeMarker = null;
                     continue;
                 }
 
-                var openAt = lower.indexOf(openMarker);
-                if (openAt === -1) {
-                    var safeLength = Math.max(0, pending.length - (openMarker.length - 1));
-                    visible += pending.slice(0, safeLength);
-                    pending = pending.slice(safeLength);
+                var opening = findOpenTag(pending);
+                if (!opening) {
+                    var suffixStart = possibleOpenSuffixStart(pending);
+                    if (suffixStart === -1) {
+                        visible += pending;
+                        pending = '';
+                    } else {
+                        visible += pending.slice(0, suffixStart);
+                        pending = pending.slice(suffixStart);
+                    }
                     return visible;
                 }
 
-                visible += pending.slice(0, openAt);
-                pending = pending.slice(openAt + openMarker.length);
-                insideThinking = true;
+                visible += pending.slice(0, opening.index);
+                pending = pending.slice(opening.index + opening.length);
+                closeMarker = '</' + opening.name + '>';
             }
 
             return visible;
         },
         finish: function() {
-            var remainder = insideThinking ? '' : pending;
+            var remainder = closeMarker ? '' : pending;
             pending = '';
-            insideThinking = false;
+            closeMarker = null;
             return remainder;
         }
     };
@@ -771,6 +950,59 @@ function cleanStructuredContent(text) {
     return text;
 }
 
+var REASONING_FIELD_NAMES = [
+    'reasoning_content',
+    'reasoning',
+    'thinking_content',
+    'thinking',
+    'analysis',
+    'reasoning_details'
+];
+
+function reasoningValueToText(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) {
+        return value.map(reasoningValueToText).filter(Boolean).join('\n');
+    }
+    if (typeof value === 'object') {
+        var preferredKeys = ['text', 'content', 'summary', 'reasoning', 'reasoning_content'];
+        for (var i = 0; i < preferredKeys.length; i++) {
+            if (value[preferredKeys[i]] !== undefined) {
+                var preferred = reasoningValueToText(value[preferredKeys[i]]);
+                if (preferred) return preferred;
+            }
+        }
+    }
+    return '';
+}
+
+function extractReasoning(container) {
+    if (!container || typeof container !== 'object') return '';
+    for (var i = 0; i < REASONING_FIELD_NAMES.length; i++) {
+        var field = REASONING_FIELD_NAMES[i];
+        if (container[field] === undefined || container[field] === null) continue;
+        var text = reasoningValueToText(container[field]);
+        if (text) return text;
+    }
+    return '';
+}
+
+function hasReasoningField(container) {
+    if (!container || typeof container !== 'object') return false;
+    return REASONING_FIELD_NAMES.some(function(field) {
+        return container[field] !== undefined;
+    });
+}
+
+function removeReasoningFields(container) {
+    if (!container || typeof container !== 'object') return;
+    REASONING_FIELD_NAMES.forEach(function(field) {
+        if (container[field] !== undefined) delete container[field];
+    });
+}
+
 
 function validateAndSanitizeParams(temperature, max_tokens) {
     var sanitizedTemp = temperature;
@@ -800,6 +1032,8 @@ app.get('/health', function(req, res) {
         reasoning_display: SHOW_REASONING,
         reasoning_display_scope: SHOW_REASONING ? 'janitor_only' : 'disabled',
         thinking_mode: ENABLE_THINKING_MODE,
+        reasoning_effort: REASONING_EFFORT,
+        reasoning_budget: REASONING_BUDGET || null,
         timeout_seconds: REQUEST_TIMEOUT / 1000,
         providers: {
             nim_configured: !!NIM_API_KEY
@@ -918,15 +1152,6 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
         }
 
-        var supportsThinking = nimModel.indexOf('deepseek') !== -1
-                           || nimModel.indexOf('thinking') !== -1
-                           || nimModel.indexOf('glm') !== -1
-                           || nimModel.indexOf('kimi') !== -1
-                           || nimModel.indexOf('moonshotai') !== -1
-                           || nimModel.indexOf('qwen') !== -1
-                           || nimModel.indexOf('minimax') !== -1
-                           || nimModel.indexOf('nemotron') !== -1;
-
         var nimRequest = {
             model: nimModel,
             messages: enhancedMessages,
@@ -935,51 +1160,15 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             stream: wantsStream
         };
 
-        // All chat_template_kwargs handling below is NIM-specific (it works around how NIM's
-        // gateway merges vLLM/SGLang chat-template params).
-        {
-            if (isKimiModel(nimModel)) {
-                // Kimi: chat_template_kwargs must be at ROOT payload level, not inside extra_body
-                nimRequest.chat_template_kwargs = { thinking: ENABLE_THINKING_MODE };
-
-            } else if (nimModel.indexOf('glm') !== -1) {
-                // GLM: chat_template_kwargs must be at ROOT level (extra_body is an SDK abstraction,
-                // not a real NIM API key — sending it as-is causes a 400). clear_thinking removed
-                // as it caused a 400 on NIM for GLM 5.1; not re-added for 5.2 since that hasn't been
-                // verified against NIM's endpoint specifically (other providers document it as valid
-                // for preserved multi-turn thinking, but NIM's behavior may differ).
-                nimRequest.chat_template_kwargs = {
-                    enable_thinking: ENABLE_THINKING_MODE
-                };
-
-            } else if (nimModel.indexOf('deepseek') !== -1) {
-                // DeepSeek: thinking OFF by default — enabling it causes extreme latency/timeouts.
-                // Requires a separate ENABLE_DEEPSEEK_THINKING env flag to opt in explicitly.
-                // chat_template_kwargs must be at ROOT payload level, not inside extra_body
-                // (extra_body is an OpenAI-SDK-only abstraction; this server posts raw JSON via axios,
-                // so a literal extra_body key is sent as-is and NIM will not merge it — same class of
-                // bug that caused the GLM 400s).
-                var deepseekThinking = process.env.ENABLE_DEEPSEEK_THINKING === 'true';
-                nimRequest.chat_template_kwargs = { thinking: deepseekThinking };
-
-            } else if (isInklingModel(nimModel)) {
-                // Inkling reasons BY DEFAULT (per Thinking Machines' docs), so
-                // ENABLE_THINKING_MODE=false must explicitly send reasoning_effort: "none" --
-                // omitting the field does NOT disable it, unlike the other providers above.
-                // Also note: Inkling takes a string enum here, not a boolean `thinking` flag,
-                // and its model id ("thinkingmachines/inkling") would otherwise false-positive
-                // match the generic `nimModel.indexOf('thinking')` check below, so this branch
-                // must stay ahead of that catch-all.
-                nimRequest.chat_template_kwargs = {
-                    reasoning_effort: ENABLE_THINKING_MODE ? 'high' : 'none'
-                };
-
-            } else if (ENABLE_THINKING_MODE && supportsThinking) {
-                // All other thinking-capable models (Qwen, Nemotron, MiniMax, etc.)
-                // Same root-level requirement applies here.
-                nimRequest.chat_template_kwargs = { thinking: true };
-            }
-        }
+        // The OpenAI Python SDK flattens extra_body into the actual HTTP JSON.
+        // This proxy posts raw JSON, so normalize recognized client options and
+        // place them at NIM's real root-level locations.
+        var thinkingConfig = applyThinkingConfig(nimRequest, nimModel, req.body);
+        console.log(
+            '   - Thinking profile: ' + thinkingConfig.profile +
+            ' (' + (thinkingConfig.enabled ? 'enabled' : 'disabled') +
+            ', effort: ' + thinkingConfig.effort + ')'
+        );
 
         var response = await axios.post(
             NIM_API_BASE + '/chat/completions',
@@ -1085,14 +1274,15 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
 
         var isReasoningDelta = false;
 
-        var reasoning = delta.reasoning_content;
+        var reasoningFieldPresent = hasReasoningField(delta);
+        var reasoning = extractReasoning(delta);
         var content = delta.content;
+        if (reasoningFieldPresent) removeReasoningFields(delta);
 
         if (reasoning) {
-            // Consume reasoning_content in both modes. Janitor receives it as
-            // portable <think> text; every other frontend drops it completely.
-            delete delta.reasoning_content;
-
+            // NIM providers currently use several names for the same channel
+            // (reasoning_content, reasoning, thinking, analysis, and structured
+            // reasoning_details). Normalize all of them into portable text.
             if (exposeReasoning) {
                 isReasoningDelta = true;
                 var cleanReasoning = cleanStructuredContent(reasoning);
@@ -1113,8 +1303,6 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             } else {
                 delta.content = cleanContent;
             }
-        } else if (!exposeReasoning && delta.reasoning_content !== undefined) {
-            delete delta.reasoning_content;
         }
 
         // FIX 4: Allow the initial role chunk through to start UI sequence
@@ -1313,7 +1501,9 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
             created: Math.floor(Date.now() / 1000),
             model: model,
             choices: (data.choices || []).map(function(choice, index) {
-                var rawContent = (choice && choice.message && choice.message.content) || '';
+                var upstreamMessage = choice && choice.message ? choice.message : {};
+                var rawContent = upstreamMessage.content || '';
+                var rawReasoning = extractReasoning(upstreamMessage);
                 if (!exposeReasoning) {
                     rawContent = stripThinkBlocks(rawContent);
                 }
@@ -1322,8 +1512,7 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                     ? displayJanitorInternalState(cleanContent)
                     : displayGenericInternalState(cleanContent, frontend, useFF5Display);
 
-                if (exposeReasoning && choice && choice.message && choice.message.reasoning_content) {
-                    var rawReasoning = choice.message.reasoning_content;
+                if (exposeReasoning && rawReasoning) {
                     var cleanReasoning = cleanStructuredContent(rawReasoning);
                     fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
                 }
@@ -1331,7 +1520,7 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                 return {
                     index: choice.index !== undefined ? choice.index : index,
                     message: {
-                        role: (choice && choice.message && choice.message.role) || 'assistant',
+                        role: upstreamMessage.role || 'assistant',
                         content: fullContent
                     },
                     finish_reason: choice.finish_reason || 'stop'
@@ -1358,6 +1547,8 @@ if (require.main === module) {
         console.log('Proxy running on port ' + PORT);
         console.log('   - SHOW_REASONING: ' + SHOW_REASONING);
         console.log('   - ENABLE_THINKING_MODE: ' + ENABLE_THINKING_MODE);
+        console.log('   - REASONING_EFFORT: ' + REASONING_EFFORT);
+        console.log('   - REASONING_BUDGET: ' + (REASONING_BUDGET || 'provider default'));
         console.log('   - REQUEST_TIMEOUT: ' + (REQUEST_TIMEOUT / 1000) + 's');
         console.log('   - Frankenstein preset loaded: ' + (PRESET_FRANKENSTEIN ? 'YES' : 'NO'));
         console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
@@ -1385,6 +1576,12 @@ if (require.main === module) {
 // under _test so regression tests exercise the exact production code.
 module.exports = app;
 module.exports._test = {
+    getThinkingProfile: getThinkingProfile,
+    buildThinkingConfig: buildThinkingConfig,
+    applyThinkingConfig: applyThinkingConfig,
+    extractReasoning: extractReasoning,
+    hasReasoningField: hasReasoningField,
+    removeReasoningFields: removeReasoningFields,
     detectFrontend: detectFrontend,
     shouldShowReasoning: shouldShowReasoning,
     stripThinkBlocks: stripThinkBlocks,
