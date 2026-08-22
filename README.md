@@ -50,6 +50,37 @@ request. If a model still emits a state tail despite the instruction, the
 response layer converts it to Markdown inside a `<think>` block so it remains
 hidden/collapsible rather than leaking raw HTML.
 
+## SillyTavern / TauriTavern raw endpoint
+
+For SillyTavern or TauriTavern, use the dedicated raw OpenAI-compatible base
+URL:
+
+```text
+https://YOUR-PROXY/st/v1
+```
+
+Its chat endpoint is `/st/v1/chat/completions`, and model discovery is available
+at `/st/v1/models`. This route deliberately **does not** inject Frankenstein,
+frontend formatting nudges, FF5 display transforms, Internal State processing,
+or the generic response cleanup used by the other frontends. SillyTavern owns
+its own system prompt, character card, World Info, instruct/context templates,
+regex, and extensions.
+
+The raw route still keeps the proxy functionality that is useful at the NIM
+transport layer:
+
+- OpenAI alias -> NVIDIA NIM model mapping (direct NIM model IDs also work)
+- GLM token/temperature compatibility caps
+- universal per-model thinking/reasoning request translation
+- request timeout and upstream error handling
+- native SSE streaming
+- common SillyTavern/OpenAI request controls such as `top_p`, `top_k`, `min_p`,
+  penalties, seed, stop strings, tool calling, and response format
+
+Unlike `/v1` and `/janitor/v1`, responses on `/st/v1` are passed back without
+stripping or converting provider reasoning fields. This lets SillyTavern handle
+reasoning/thinking presentation itself.
+
 ## Environment
 
 Required:

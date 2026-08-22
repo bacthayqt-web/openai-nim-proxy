@@ -220,11 +220,34 @@ function applyThinkingConfig(nimRequest, nimModelId, requestBody, defaults) {
     return config;
 }
 
-// Frontend is determined by which URL path the request came in on
-// (Janitor AI's proxy field points at /janitor/v1/chat/completions).
+// Frontend is determined by which URL path the request came in on.
+// Janitor uses the preset-aware /janitor route, while SillyTavern uses the
+// raw /st route so its own presets, World Info, regex, and prompt stack remain
+// authoritative.
 function detectFrontend(req) {
     if (req.path.indexOf('/janitor/') === 0) return 'janitor';
+    if (req.path.indexOf('/st/') === 0) return 'sillytavern';
     return 'default';
+}
+
+function getRouteProfile(req) {
+    var frontend = detectFrontend(req);
+    if (frontend === 'sillytavern') {
+        return {
+            frontend: frontend,
+            applyPreset: false,
+            enhanceFormatting: false,
+            rawResponse: true,
+            passthroughParams: true
+        };
+    }
+    return {
+        frontend: frontend,
+        applyPreset: true,
+        enhanceFormatting: true,
+        rawResponse: false,
+        passthroughParams: false
+    };
 }
 
 // SHOW_REASONING is intentionally scoped to the Janitor endpoint. Native
@@ -1136,6 +1159,45 @@ function removeReasoningFields(container) {
 }
 
 
+var SILLYTAVERN_PASSTHROUGH_FIELDS = [
+    // Standard OpenAI-compatible controls commonly emitted by SillyTavern.
+    'top_p',
+    'top_k',
+    'min_p',
+    'seed',
+    'stop',
+    'frequency_penalty',
+    'presence_penalty',
+    'repetition_penalty',
+    'logit_bias',
+    'logprobs',
+    'top_logprobs',
+    'n',
+    'tools',
+    'tool_choice',
+    'parallel_tool_calls',
+    'response_format',
+    'stream_options'
+];
+
+function buildNimRequest(requestBody, nimModel, messages, sanitized, wantsStream, passthroughParams) {
+    var nimRequest = {
+        model: nimModel,
+        messages: messages,
+        temperature: sanitized.temperature,
+        max_tokens: sanitized.max_tokens,
+        stream: wantsStream
+    };
+
+    if (passthroughParams) {
+        SILLYTAVERN_PASSTHROUGH_FIELDS.forEach(function(key) {
+            if (requestBody[key] !== undefined) nimRequest[key] = requestBody[key];
+        });
+    }
+
+    return nimRequest;
+}
+
 function validateAndSanitizeParams(temperature, max_tokens) {
     var sanitizedTemp = temperature;
     if (temperature !== undefined && temperature !== null) {
@@ -1170,6 +1232,11 @@ app.get('/health', function(req, res) {
         providers: {
             nim_configured: !!NIM_API_KEY
         },
+        routes: {
+            default: '/v1',
+            janitor: '/janitor/v1',
+            sillytavern_raw: '/st/v1'
+        },
         presets: {
             frankenstein: !!PRESET_FRANKENSTEIN,
             frankimstein: !!PRESET_FRANKIMSTEIN,
@@ -1178,10 +1245,10 @@ app.get('/health', function(req, res) {
     });
 });
 
-app.get('/v1/models', function(req, res) {
-    var models = Object.keys(MODEL_MAPPING).map(function(id) {
+function buildModelList(rawMode) {
+    return Object.keys(MODEL_MAPPING).map(function(id) {
         var nimModel = MODEL_MAPPING[id];
-        var preset = getPresetForModel(nimModel);
+        var preset = rawMode ? null : getPresetForModel(nimModel);
         var presetLabel = 'none';
         if (preset) {
             var presetLower = preset.name.toLowerCase();
@@ -1202,10 +1269,17 @@ app.get('/v1/models', function(req, res) {
             preset: presetLabel
         };
     });
-    res.json({ object: 'list', data: models });
+}
+
+app.get('/v1/models', function(req, res) {
+    res.json({ object: 'list', data: buildModelList(false) });
 });
 
-app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async function(req, res) {
+app.get('/st/v1/models', function(req, res) {
+    res.json({ object: 'list', data: buildModelList(true) });
+});
+
+app.post(['/v1/chat/completions', '/janitor/v1/chat/completions', '/st/v1/chat/completions'], async function(req, res) {
     try {
         var model = req.body.model;
         var messages = req.body.messages;
@@ -1239,15 +1313,17 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
         }
 
-        // Frankenstein is now the universal preset for every model. Ignore
-        // legacy client overrides so no frontend can silently select an older
-        // model-specific preset.
-        var preset = getPresetForModel(nimModel);
-        if (preset_override && preset_override !== 'frankenstein') {
+        var routeProfile = getRouteProfile(req);
+        var frontend = routeProfile.frontend;
+
+        // Frankenstein remains universal on the existing endpoints, but the
+        // dedicated SillyTavern endpoint deliberately skips the entire preset
+        // stack so SillyTavern can own prompting and formatting itself.
+        var preset = routeProfile.applyPreset ? getPresetForModel(nimModel) : null;
+        if (routeProfile.applyPreset && preset_override && preset_override !== 'frankenstein') {
             console.log('Preset override ignored: ' + preset_override + ' (universal Frankenstein routing is active)');
         }
 
-        var frontend = detectFrontend(req);
         var processedMessages = messages;
 
         if (preset) {
@@ -1270,29 +1346,43 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             } else {
                 console.log('   - Internal States: generic FF5 HTML format locked');
             }
-        } else {
+        } else if (routeProfile.applyPreset) {
             console.log('No preset available for model ' + nimModel + ', using raw messages');
+        } else {
+            console.log('SillyTavern raw mode: preset injection and proxy formatting disabled for model ' + nimModel);
         }
 
-        var useFF5Display = preset === PRESET_FRANKENSTEIN;
+        var useFF5Display = routeProfile.applyPreset && preset === PRESET_FRANKENSTEIN;
         var allowHtmlUI = useFF5Display && frontend !== 'janitor';
-        var enhancedMessages = getEnhancedMessages(nimModel, processedMessages, allowHtmlUI);
+        var enhancedMessages = routeProfile.enhanceFormatting
+            ? getEnhancedMessages(nimModel, processedMessages, allowHtmlUI)
+            : processedMessages.map(function(message) { return Object.assign({}, message); });
 
-        // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
-        var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
-        var finalOtherMsgs = enhancedMessages.filter(function(m) { return m.role !== 'system'; });
-        if (finalSystemMsgs.length > 1) {
-            var combinedFinalSystem = finalSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
-            enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
+        // Existing preset-aware routes keep their historical single-system
+        // normalization. In raw SillyTavern mode, only GLM gets this provider
+        // compatibility workaround; other model families retain ST's exact
+        // message ordering and system-message structure.
+        var shouldMergeSystemMessages = routeProfile.applyPreset || nimModel.toLowerCase().indexOf('glm') !== -1;
+        if (shouldMergeSystemMessages) {
+            var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
+            var finalOtherMsgs = enhancedMessages.filter(function(m) { return m.role !== 'system'; });
+            var canSafelyMergeSystemMessages = finalSystemMsgs.every(function(m) {
+                return typeof m.content === 'string';
+            });
+            if (finalSystemMsgs.length > 1 && canSafelyMergeSystemMessages) {
+                var combinedFinalSystem = finalSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
+                enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
+            }
         }
 
-        var nimRequest = {
-            model: nimModel,
-            messages: enhancedMessages,
-            temperature: sanitized.temperature,
-            max_tokens: sanitized.max_tokens,
-            stream: wantsStream
-        };
+        var nimRequest = buildNimRequest(
+            req.body,
+            nimModel,
+            enhancedMessages,
+            sanitized,
+            wantsStream,
+            routeProfile.passthroughParams
+        );
 
         // The OpenAI Python SDK flattens extra_body into the actual HTTP JSON.
         // This proxy posts raw JSON, so normalize recognized client options and
@@ -1355,7 +1445,13 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
             });
         }
 
-        if (wantsStream) {
+        if (routeProfile.rawResponse) {
+            if (wantsStream) {
+                handleRawStream(response.data, res);
+            } else {
+                handleRawNonStream(response.data, res);
+            }
+        } else if (wantsStream) {
             handleStream(response.data, res, frontend, useFF5Display);
         } else {
             handleNonStream(response.data, model, res, frontend, useFF5Display);
@@ -1373,6 +1469,28 @@ app.post(['/v1/chat/completions', '/janitor/v1/chat/completions'], async functio
         }
     }
 });
+
+function handleRawStream(inputStream, res) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    inputStream.on('data', function(chunk) {
+        res.write(chunk);
+    });
+    inputStream.on('end', function() {
+        res.end();
+    });
+    inputStream.on('error', function(err) {
+        console.error('Raw SillyTavern stream error:', err.message);
+        res.end();
+    });
+}
+
+function handleRawNonStream(data, res) {
+    res.json(data);
+}
 
 function handleStream(inputStream, res, frontend, useFF5Display) {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1717,9 +1835,14 @@ module.exports._test = {
     hasReasoningField: hasReasoningField,
     removeReasoningFields: removeReasoningFields,
     detectFrontend: detectFrontend,
+    getRouteProfile: getRouteProfile,
     shouldShowReasoning: shouldShowReasoning,
     stripThinkBlocks: stripThinkBlocks,
     createThinkingStripStream: createThinkingStripStream,
+    buildNimRequest: buildNimRequest,
+    buildModelList: buildModelList,
+    handleRawStream: handleRawStream,
+    handleRawNonStream: handleRawNonStream,
     normalizeJanitorInternalState: normalizeJanitorInternalState,
     wrapJanitorInternalState: wrapJanitorInternalState,
     displayJanitorInternalState: displayJanitorInternalState,
