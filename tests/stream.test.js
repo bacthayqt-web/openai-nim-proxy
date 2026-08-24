@@ -155,8 +155,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
         '<!-- FF5_INTERNAL_STATE\nTURN: 7\n[WORLD SIM]\nEvent\nEND_FF5_INTERNAL_STATE -->'
     ], 'default', [4, 11, 1, 23]);
     assert(genericFallbackStream.content.includes('<details style='), 'Generic hidden-comment variant must become a visible panel');
-    assert(genericFallbackStream.content.includes('TURN: 7'));
-    assert(genericFallbackStream.content.includes('[WORLD SIM]'));
+    assert(/Turn:\s*7/i.test(genericFallbackStream.content));
+    assert(genericFallbackStream.content.includes('WORLD SIM'));
 
     let nonStreamJson = null;
     helpers.handleNonStream({
@@ -193,8 +193,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
     }, 'default', true);
     const genericNonStreamContent = genericNonStreamJson.choices[0].message.content;
     assert(genericNonStreamContent.includes('<details style='));
-    assert(genericNonStreamContent.includes('TURN: 8'));
-    assert(genericNonStreamContent.includes('[WORLD SIM]'));
+    assert(/Turn:\s*8/i.test(genericNonStreamContent));
+    assert(genericNonStreamContent.includes('WORLD SIM'));
 
     console.log('stream.test.js: all assertions passed');
 })().catch((error) => {

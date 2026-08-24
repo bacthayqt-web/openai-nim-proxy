@@ -1,7 +1,8 @@
-# OpenAI-compatible NVIDIA NIM proxy
+# OpenAI-compatible NVIDIA NIM and OpenRouter proxy
 
-This proxy routes OpenAI-style chat completion requests to NVIDIA NIM and
-injects model-specific roleplay presets.
+This proxy routes OpenAI-style chat completion requests to NVIDIA NIM or
+OpenRouter and injects the same Frankenstein 5.2 roleplay preset before either
+provider receives the conversation.
 
 ## Frankenstein 5.2 profile
 
@@ -19,7 +20,7 @@ Chub and other generic frontends:
   Chekhov's Gun, and Internal Thoughts
 
 The proxy expands FF5's SillyTavern `setvar`, `getvar`, `trim`, and `roll::1d20`
-macros before sending the request to NVIDIA. On generic frontends, older
+macros before sending the request upstream. On generic frontends, older
 Internal State blocks are removed from model context after two turns while the
 newest block is retained. Every exposed model routes through this Frankenstein
 profile; legacy preset overrides are ignored.
@@ -43,56 +44,58 @@ Use the Janitor-specific route in Janitor AI:
 https://YOUR-PROXY/janitor/v1/chat/completions
 ```
 
-That route converts Pop-in Graphics to portable Markdown and disables all nine
-Internal State prompts (the eight modules plus the master output prompt). Any
-state block left in older Janitor history is normalized before the model
-request. If a model still emits a state tail despite the instruction, the
-response layer converts it to Markdown inside a `<think>` block so it remains
-hidden/collapsible rather than leaking raw HTML.
+That route converts Pop-in Graphics and Internal States to portable Markdown.
+The response layer places the final Internal States record inside a `<think>`
+block so it remains hidden/collapsible rather than leaking raw HTML.
 
-## SillyTavern / TauriTavern raw endpoint
+## OpenRouter routes
 
-For SillyTavern or TauriTavern, use the dedicated raw OpenAI-compatible base
-URL:
+For Chub and other generic OpenAI-compatible clients, use this API base:
 
 ```text
-https://YOUR-PROXY/st/v1
+https://YOUR-PROXY/openrouter/v1
 ```
 
-Its chat endpoint is `/st/v1/chat/completions`, and model discovery is available
-at `/st/v1/models`. This route deliberately **does not** inject Frankenstein,
-frontend formatting nudges, FF5 display transforms, Internal State processing,
-or the generic response cleanup used by the other frontends. SillyTavern owns
-its own system prompt, character card, World Info, instruct/context templates,
-regex, and extensions.
+Its full chat endpoint is
+`https://YOUR-PROXY/openrouter/v1/chat/completions`. It sends the compiled FF5
+system prompt to OpenRouter, preserves OpenRouter-only request fields such as
+`provider`, `models`, `plugins`, `tools`, and `reasoning`, and applies the same
+generic FF5 response formatting used by the NIM route.
 
-The raw route still keeps the proxy functionality that is useful at the NIM
-transport layer:
+For Janitor AI, use this API base instead:
 
-- OpenAI alias -> NVIDIA NIM model mapping (direct NIM model IDs also work)
-- GLM token/temperature compatibility caps
-- universal per-model thinking/reasoning request translation
-- request timeout and upstream error handling
-- native SSE streaming
-- common SillyTavern/OpenAI request controls such as `top_p`, `top_k`, `min_p`,
-  penalties, seed, stop strings, tool calling, and response format
+```text
+https://YOUR-PROXY/janitor/openrouter/v1
+```
 
-Unlike `/v1` and `/janitor/v1`, responses on `/st/v1` are passed back without
-stripping or converting provider reasoning fields. This lets SillyTavern handle
-reasoning/thinking presentation itself.
+Its full chat endpoint is
+`https://YOUR-PROXY/janitor/openrouter/v1/chat/completions`. This keeps the
+Janitor Markdown and `<think>` behavior while using OpenRouter for inference.
+Both API bases also expose `/models` by forwarding OpenRouter's model list.
+
+Send a canonical OpenRouter model ID such as `provider/model-name` in the
+request. Canonical IDs pass through unchanged. If a frontend can only send an
+alias such as `gpt-4`, set `OPENROUTER_MODEL` as a fallback or define explicit
+aliases with `OPENROUTER_MODEL_MAPPING`.
 
 ## Environment
 
-Required:
+Set the key for each provider route you use:
 
 ```text
 NIM_API_KEY=your_nvidia_api_key
+OPENROUTER_API_KEY=your_openrouter_api_key
 ```
 
 Common optional settings:
 
 ```text
 NIM_API_BASE=https://integrate.api.nvidia.com/v1
+OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=provider/model-name
+OPENROUTER_MODEL_MAPPING={"gpt-4":"provider/model-name"}
+OPENROUTER_SITE_URL=https://your-site.example
+OPENROUTER_APP_NAME=FF5 Proxy
 PORT=3000
 REQUEST_TIMEOUT=600000
 SHOW_REASONING=false
@@ -100,6 +103,12 @@ ENABLE_THINKING_MODE=false
 REASONING_EFFORT=high
 REASONING_BUDGET=16384
 ```
+
+`OPENROUTER_MODEL` is only a fallback for non-canonical aliases; a request that
+already contains a canonical `provider/model-name` still uses that model.
+`OPENROUTER_MODEL_MAPPING` is an optional JSON object and takes priority over
+the fallback. The site URL and app name are optional OpenRouter attribution
+headers.
 
 `ENABLE_THINKING_MODE` is the universal switch. The proxy translates it into
 the request format used by each recognized model family instead of treating
@@ -127,6 +136,14 @@ Reasoning responses are normalized from `reasoning_content`, `reasoning`,
 `<think>` block. Generic clients continue to receive only the final answer,
 including when a provider emits literal `<think>`, `<thinking>`, `<reasoning>`,
 or `<analysis>` tags.
+
+On OpenRouter routes, a caller-supplied `reasoning` object is preserved. When
+the request does not supply one, an explicitly configured
+`ENABLE_THINKING_MODE` is translated to OpenRouter's unified `reasoning`
+object. `REASONING_BUDGET` becomes `reasoning.max_tokens`; otherwise
+`REASONING_EFFORT` becomes `reasoning.effort`. Generic routes ask OpenRouter not
+to return reasoning text, while Janitor can receive it only when
+`SHOW_REASONING=true`.
 
 ## Run and verify
 

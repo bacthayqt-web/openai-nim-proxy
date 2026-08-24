@@ -73,7 +73,8 @@ const genericHistory = helpers.prepareFF5History([
     { role: 'user', content: 'Continue.' }
 ]);
 assert(!genericHistory[0].content.includes('FF5_INTERNAL_STATE'), 'Old generic state must be pruned');
-assert(genericHistory[2].content.includes('FF5_INTERNAL_STATE'), 'Newest generic state must be retained');
+assert(genericHistory[2].content.includes('<internal_states>'), 'Newest generic state must be retained');
+assert(genericHistory[2].content.includes('TURN: 2'), 'Newest generic state content must survive normalization');
 
 const janitorHistory = helpers.prepareFF5History([
     { role: 'assistant', content: 'Old.\n<!-- FF5_INTERNAL_STATE\nTURN: 1\nEND_FF5_INTERNAL_STATE -->' },
