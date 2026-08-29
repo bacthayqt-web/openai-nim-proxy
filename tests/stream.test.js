@@ -141,26 +141,6 @@ async function runFrontendStream(contents, frontend, transportCuts) {
     assert(streamedPopIn.content.includes('📱 Phone message'), 'Ordinary Pop-in Graphics must remain visible');
     assertNoInternalState(streamedPopIn.content);
 
-
-    const streamedSectionOnlyHtml = await runFrontendStream([
-        'Narrative paragraph.\n',
-        '<details><summary>👤 NPC AGENDAS</summary>- Alice | Agenda: investigate</details>',
-        '<details><summary>📓 GM NOTEBOOK</summary>- [T] Secret note</details>'
-    ], 'janitor', [2, 7, 13, 5, 29]);
-    assert(streamedSectionOnlyHtml.content.includes('Narrative paragraph.'));
-    assert(streamedSectionOnlyHtml.content.includes('<think>'), 'Section-only FF5 HTML must still be hidden in Janitor think');
-    assert(streamedSectionOnlyHtml.content.includes('#### 👤 NPC AGENDAS'));
-    assert(!streamedSectionOnlyHtml.content.includes('<details>'));
-
-    const streamedTransport = await runFrontendStream([
-        'Narrative paragraph.\n',
-        '<!-- FF5_INTERNAL_',
-        'STATE\n### INTERNAL STATES\n#### WORLD SIM\n- Event\nEND_FF5_INTERNAL_STATE -->'
-    ], 'janitor', [1, 4, 9, 3, 17]);
-    assert(streamedTransport.content.includes('<think>'));
-    assert(streamedTransport.content.includes('#### WORLD SIM'));
-    assert(!streamedTransport.content.includes('FF5_INTERNAL_STATE'));
-
     const genericHtmlStream = await runFrontendStream([
         'Narrative paragraph.\n',
         '<!-- GFX_START -->\n<internal_states><details><summary>🎬 INTERNAL STATES</summary>',

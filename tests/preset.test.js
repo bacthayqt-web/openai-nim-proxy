@@ -48,7 +48,7 @@ const janitorBuilt = helpers.buildOrderedMessagesFromPreset(
     preset,
     [{ role: 'user', content: 'Start.' }],
     janitorOverrides,
-    []
+    helpers.internalStatePromptIds
 );
 const janitorSystem = janitorBuilt.find((message) => message.role === 'system');
 assert(janitorSystem, 'Janitor compiled preset must contain a merged system message');
@@ -56,23 +56,15 @@ assert(janitorSystem.content.includes('# Realism Mode:'));
 assert(janitorSystem.content.includes('# Reasoning Rules'));
 assert(!janitorSystem.content.includes('# Freaky Mode:'));
 assert(!janitorSystem.content.includes('# Reasoning Protocol'));
-assert(janitorSystem.content.includes('JANITOR OVERRIDE — INTERNAL STATES OUTPUT FORMAT'));
-assert(janitorSystem.content.includes('<!-- FF5_INTERNAL_STATE'));
-assert(janitorSystem.content.includes('END_FF5_INTERNAL_STATE -->'));
-assert(janitorSystem.content.includes('DND SIMULATION LOGIC'));
-assert(janitorSystem.content.includes('Purpose: Persistent relationship engine'));
-assert(janitorSystem.content.includes('worldsimRoll:'));
+assert(!janitorSystem.content.includes('<!-- FF5_INTERNAL_STATE'));
+assert(!janitorSystem.content.includes('DND SIMULATION LOGIC'));
+assert(!janitorSystem.content.includes('Purpose: Persistent relationship engine'));
+assert(!janitorSystem.content.includes('worldsimRoll:'));
+assert(!janitorSystem.content.includes('Append this entire block as raw HTML'));
+assert(janitorSystem.content.includes('Internal States are disabled on this frontend'));
+assert(!janitorSystem.content.includes('Ensure internal states created correctly'));
 assert(!/<colored_dialogue>|<font\s+color=/i.test(janitorSystem.content));
 assert(!/\{\{(?:setvar|getvar|roll)::/.test(janitorSystem.content), 'FF5 macros must be expanded server-side');
-
-const janitorEnhanced = helpers.getEnhancedMessages('moonshotai/kimi-k3', janitorBuilt, false, 'janitor');
-const enhancedSystem = janitorEnhanced.find((message) => message.role === 'system');
-assert(enhancedSystem.content.includes('JANITOR INTERNAL-STATE TRANSPORT OVERRIDE'));
-assert(
-    enhancedSystem.content.lastIndexOf('JANITOR INTERNAL-STATE TRANSPORT OVERRIDE') >
-        enhancedSystem.content.lastIndexOf('Rules for HTML Generation'),
-    'Janitor transport override must appear after the original HTML state instructions'
-);
 
 const genericHistory = helpers.prepareFF5History([
     { role: 'assistant', content: 'Old.\n<!-- FF5_INTERNAL_STATE\nTURN: 1\nEND_FF5_INTERNAL_STATE -->' },
@@ -87,13 +79,11 @@ assert(genericHistory[2].content.includes('TURN: 2'), 'Newest generic state cont
 const janitorHistory = helpers.prepareFF5History([
     { role: 'assistant', content: 'Old.\n<!-- FF5_INTERNAL_STATE\nTURN: 1\nEND_FF5_INTERNAL_STATE -->' },
     { role: 'user', content: 'Next.' },
-    { role: 'assistant', content: 'Recent.\n<think>\n### INTERNAL STATES\n#### WORLD SIM\nEvent\n</think>' },
+    { role: 'assistant', content: 'Recent.\n### INTERNAL STATES\n[WORLD SIM]\nEvent' },
     { role: 'user', content: 'Continue.' }
-], false, 'janitor');
-assert.strictEqual(janitorHistory[0].content.trim(), 'Old.', 'Old Janitor state must be pruned from history');
-assert(janitorHistory[2].content.includes('<internal_states>'), 'Newest Janitor state must be restored for model continuity');
-assert(janitorHistory[2].content.includes('WORLD SIM'));
-assert(!janitorHistory[2].content.includes('<think>'));
+], true);
+assert.strictEqual(janitorHistory[0].content, 'Old.', 'Janitor hidden state must be removed from history');
+assert.strictEqual(janitorHistory[2].content, 'Recent.', 'Janitor visible state must be removed from history');
 
 assert.strictEqual(helpers.detectFrontend({ path: '/janitor/v1/chat/completions' }), 'janitor');
 assert.strictEqual(helpers.detectFrontend({ path: '/v1/chat/completions' }), 'default');

@@ -707,27 +707,13 @@ function applyFrontendDisplay(text, frontend, enabled) {
 function findInternalStateStart(input) {
     var text = String(input || '');
     var candidates = [];
-    var stateSectionNames = "NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD";
     var patterns = [
-        // Preferred Janitor transport marker. The model is explicitly told to
-        // use this marker so the proxy can identify the state tail even when
-        // Markdown/HTML formatting varies between models.
         /<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/i,
-        /<!--\s*(?:JANITOR[_\s-]*)?INTERNAL[_\s-]*STATES?\b/i,
-
-        // Native/master state containers.
         /<internal[_\s-]*states?\b/i,
-        /<internal_(?:dndsim|gmnotebook|bondtracker|chekhovguntracker|npcthoughts|worldsim|inventory|quest|faction|agenda|location)\b/i,
-
-        // Full FF5 details block, or a model that omitted the outer master
-        // details/container and started directly with one known state section.
-        /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,120}INTERNAL\s+STATES?\b/i,
-        new RegExp('<summary\\b[^>]*>[^<\\n]{0,160}(?:' + stateSectionNames + ')\\b', 'i'),
-
-        // Markdown/plaintext forms.
+        /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,100}INTERNAL\s+STATES?\b/i,
         /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b/im,
-        new RegExp('(?:^|\\n)[ \t]*(?:\\*\\*)?\\[(?:' + stateSectionNames + ')\\](?:\\*\\*)?', 'im'),
-        new RegExp('(?:^|\\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\\*\\*|__)?(?:[^A-Za-z0-9\\n]{0,4})?(?:' + stateSectionNames + ')\\b', 'im')
+        /(?:^|\n)[ \t]*(?:\*\*)?\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)\](?:\*\*)?/im,
+        /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|INVENTORY, FEATS & TITLES)\b/im
     ];
 
     patterns.forEach(function(pattern) {
@@ -737,16 +723,6 @@ function findInternalStateStart(input) {
 
     if (candidates.length === 0) return -1;
     var start = Math.min.apply(Math, candidates);
-
-    // If the first recognizable marker is a nested <summary> section, pull
-    // the opening <details> tag into the hidden block too. Otherwise Janitor
-    // could receive a dangling visible <details> fragment before <think>.
-    if (text.slice(start, start + 8).toLowerCase() === '<summary') {
-        var detailsStart = text.toLowerCase().lastIndexOf('<details', start);
-        if (detailsStart !== -1 && start - detailsStart <= 1024) {
-            start = detailsStart;
-        }
-    }
 
     // Generic FF5 output wraps Internal States in GFX markers. Include the
     // opening wrapper in the hidden block, but do not consume unrelated phone,
@@ -773,8 +749,6 @@ function normalizeJanitorInternalState(input) {
     if (!state) return '';
 
     var body = state
-        .replace(/^\s*```(?:markdown|md|text|html)?\s*$/gim, '')
-        .replace(/^\s*```\s*$/gim, '')
         .replace(/<think\b[^>]*>/gi, '')
         .replace(/<\/think\s*>/gi, '')
         .replace(/<!--\s*GFX_START\s*-->/gi, '')
@@ -1028,7 +1002,7 @@ function createInternalStateStream(frontend) {
     // Retain only enough text to recognize a marker split across chunks. This
     // keeps ordinary narrative streaming with a small fixed delay instead of
     // buffering an entire short response.
-    var lookbehind = 512;
+    var lookbehind = 256;
 
     return {
         push: function(chunk) {
@@ -1165,15 +1139,13 @@ function toBoolean(val) {
     return val === true || val === 'true';
 }
 
-function getEnhancedMessages(model, messages, allowHtmlUI, frontend) {
-    frontend = frontend || (allowHtmlUI ? 'default' : 'janitor');
-    var isJanitor = frontend === 'janitor';
+function getEnhancedMessages(model, messages, allowHtmlUI) {
     var formattingNudge = {
         role: 'system',
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
-            (!isJanitor
+            (allowHtmlUI
                 ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences. INTERNAL STATE FORMAT LOCK: Always use the preset\'s native <internal_states> + nested <details>/<summary> HTML structure, even if older assistant messages contain Markdown state headings. Never imitate Markdown Internal States on generic/Chub clients.'
-                : '\n\nJANITOR INTERNAL-STATE TRANSPORT OVERRIDE: This instruction supersedes any earlier FF5 instruction that asks for raw HTML Internal States. Visible narrative and Pop-in Graphics must use Markdown. At the very end of every response, append the complete Internal States record as Markdown inside exactly these transport comments:\n<!-- FF5_INTERNAL_STATE\n### INTERNAL STATES\n[all enabled state sections and their values]\nEND_FF5_INTERNAL_STATE -->\nThe opening marker and END_FF5_INTERNAL_STATE marker are mandatory. Never output <internal_states>, <details>, <summary>, CSS, or a literal <think> tag for this state record. Do not omit state sections; write None when empty. The proxy, not the model, converts this transport block into a <think> block for Janitor display.')
+                : '\n\nJANITOR RENDERING: Use Markdown for visible narrative, Pop-in Graphics, and the Internal States format supplied by the Janitor overrides. Never output raw HTML/CSS/details tags for Janitor. Append the complete Markdown Internal States record at the end; the server will place that record inside a <think> block for display.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -1194,13 +1166,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI, frontend) {
                  msg.content.indexOf('paragraph') !== -1 ||
                  msg.content.indexOf('formatting') !== -1)) {
                 return Object.assign({}, msg, {
-                    // Keep Janitor's transport override last so it wins over
-                    // the original FF5 HTML master template later in the
-                    // merged system prompt. Generic clients keep the original
-                    // ordering and native FF5 HTML behavior.
-                    content: isJanitor
-                        ? msg.content + '\n\n' + formattingNudge.content
-                        : formattingNudge.content + '\n\n' + msg.content
+                    content: formattingNudge.content + '\n\n' + msg.content
                 });
             }
             return msg;
@@ -1214,8 +1180,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI, frontend) {
         var lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only — no JSON.' +
-                    (isJanitor ? ' For Internal States, finish with the required <!-- FF5_INTERNAL_STATE ... END_FF5_INTERNAL_STATE --> Markdown transport block; do not use raw HTML or <think> yourself.' : '') + ']'
+                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only — no JSON.]'
             });
         }
     }
@@ -1520,7 +1485,7 @@ app.post([
 
         var useFF5Display = preset === PRESET_FRANKENSTEIN;
         var allowHtmlUI = useFF5Display && frontend !== 'janitor';
-        var enhancedMessages = getEnhancedMessages(upstreamModel, processedMessages, allowHtmlUI, frontend);
+        var enhancedMessages = getEnhancedMessages(upstreamModel, processedMessages, allowHtmlUI);
 
         // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
         var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
@@ -2023,7 +1988,6 @@ module.exports._test = {
     prepareFF5History: prepareFF5History,
     buildOrderedMessagesFromPreset: buildOrderedMessagesFromPreset,
     expandPresetMacros: expandPresetMacros,
-    getEnhancedMessages: getEnhancedMessages,
     getOrderedPresetPrompts: getOrderedPresetPrompts,
     internalStatePromptIds: INTERNAL_STATE_PROMPT_IDS
 };
