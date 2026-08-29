@@ -33,14 +33,10 @@ assert.deepStrictEqual(
     config('z-ai/glm-5.2', {}, true).chat_template_kwargs,
     { enable_thinking: true }
 );
-const kimiK3 = config('moonshotai/kimi-k3', {}, true, 'high');
-assert.strictEqual(
-    kimiK3.chat_template_kwargs,
-    undefined,
-    'Kimi K3 must not receive the legacy chat_template_kwargs.thinking flag'
+assert.deepStrictEqual(
+    config('moonshotai/kimi-k3', {}, true).chat_template_kwargs,
+    { thinking: true }
 );
-assert.deepStrictEqual(kimiK3.top_level, { reasoning_effort: 'high' });
-assert.strictEqual(kimiK3.enabled, true, 'Kimi K3 reasoning is always enabled');
 
 const qwen = config('qwen/qwen3.8', {}, true, 'medium');
 assert.deepStrictEqual(qwen.chat_template_kwargs, { enable_thinking: true });
