@@ -495,8 +495,8 @@ var PROMPT_OVERRIDES = {
 };
 
 // Internal State prompt ids are retained as a named group for tests and future
-// profiles. Janitor receives the complete stack through its Markdown
-// overrides; the response layer places the state record in a <think> block.
+// profiles. Janitor excludes this entire group; generic clients keep the
+// existing FF5 Internal States behavior unchanged.
 var INTERNAL_STATE_PROMPT_IDS = [
     '019f62e8-892f-7021-97a6-42e1b83eaad3', // DnD Simulator
     '019f67b4-7381-7000-bcc4-496b2e6ed920', // Internal Agenda
@@ -510,7 +510,7 @@ var INTERNAL_STATE_PROMPT_IDS = [
 ];
 
 var PROMPT_EXCLUSIONS = {
-    janitor: []
+    janitor: INTERNAL_STATE_PROMPT_IDS.slice()
 };
 
 function getPresetForModel(nimModelId) {
@@ -1037,9 +1037,11 @@ function createInternalStateStream(frontend) {
                 return remainder;
             }
 
-            var state = frontend === 'janitor'
-                ? wrapJanitorInternalState(stateBuffer)
-                : normalizeGenericInternalState(stateBuffer);
+            var state = frontend === 'strip'
+                ? ''
+                : (frontend === 'janitor'
+                    ? wrapJanitorInternalState(stateBuffer)
+                    : normalizeGenericInternalState(stateBuffer));
             stateBuffer = '';
             stateStarted = false;
             pending = '';
@@ -1052,7 +1054,7 @@ function createInternalStateStream(frontend) {
 }
 
 function createJanitorStateStream() {
-    return createInternalStateStream('janitor');
+    return createInternalStateStream('strip');
 }
 
 // FIX 1: Merge System Messages in Presets safely
@@ -1139,13 +1141,15 @@ function toBoolean(val) {
     return val === true || val === 'true';
 }
 
-function getEnhancedMessages(model, messages, allowHtmlUI) {
+function getEnhancedMessages(model, messages, allowHtmlUI, internalStatesDisabled) {
     var formattingNudge = {
         role: 'system',
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
                 ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences. INTERNAL STATE FORMAT LOCK: Always use the preset\'s native <internal_states> + nested <details>/<summary> HTML structure, even if older assistant messages contain Markdown state headings. Never imitate Markdown Internal States on generic/Chub clients.'
-                : '\n\nJANITOR RENDERING: Use Markdown for visible narrative, Pop-in Graphics, and the Internal States format supplied by the Janitor overrides. Never output raw HTML/CSS/details tags for Janitor. Append the complete Markdown Internal States record at the end; the server will place that record inside a <think> block for display.')
+                : (internalStatesDisabled
+                    ? '\n\nJANITOR RENDERING: Use Markdown for visible narrative and Pop-in Graphics. Never output raw HTML/CSS/details tags for Janitor. Internal States are disabled on Janitor: never generate, append, summarize, or reconstruct any Internal States record or section.'
+                    : '\n\nJANITOR RENDERING: Use Markdown for visible narrative, Pop-in Graphics, and the Internal States format supplied by the Janitor overrides. Never output raw HTML/CSS/details tags for Janitor. Append the complete Markdown Internal States record at the end; the server will place that record inside a <think> block for display.'))
     };
 
     var hasFormattingInstruction = messages.some(
@@ -1462,7 +1466,7 @@ app.post([
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
             var promptExclusions = PROMPT_EXCLUSIONS[frontend] || [];
-            var dropAllInternalStates = false;
+            var dropAllInternalStates = frontend === 'janitor';
             var sourceMessages = preset === PRESET_FRANKENSTEIN
                 ? prepareFF5History(messages, dropAllInternalStates, frontend)
                 : messages;
@@ -1475,7 +1479,7 @@ app.post([
             console.log('Preset applied: ' + preset.name + ' for ' + provider + ' model ' + upstreamModel + ' (frontend: ' + frontend + ')');
             console.log('   - Preset prompts injected: ' + (preset.prompts.length - promptExclusions.length));
             if (frontend === 'janitor') {
-                console.log('   - Internal States: ENABLED for Janitor (Markdown inside think block)');
+                console.log('   - Internal States: DISABLED for Janitor');
             } else {
                 console.log('   - Internal States: generic FF5 HTML format locked');
             }
@@ -1485,7 +1489,8 @@ app.post([
 
         var useFF5Display = preset === PRESET_FRANKENSTEIN;
         var allowHtmlUI = useFF5Display && frontend !== 'janitor';
-        var enhancedMessages = getEnhancedMessages(upstreamModel, processedMessages, allowHtmlUI);
+        var internalStatesDisabled = useFF5Display && frontend === 'janitor';
+        var enhancedMessages = getEnhancedMessages(upstreamModel, processedMessages, allowHtmlUI, internalStatesDisabled);
 
         // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
         var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
@@ -1618,7 +1623,7 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
     var internalStateStream = useFF5Display
-        ? createInternalStateStream(frontend)
+        ? (frontend === 'janitor' ? createJanitorStateStream() : createInternalStateStream(frontend))
         : null;
     var thinkingStripStream = !exposeReasoning
         ? createThinkingStripStream()
@@ -1691,9 +1696,8 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             if (delta.content === '') return;
         }
 
-        // Hold a possible state tail until completion. Janitor receives a
-        // Markdown state record inside a think block; generic clients receive
-        // one normalized visible FF5 panel.
+        // Hold a possible state tail until completion. Janitor strips the
+        // state completely; generic clients receive one normalized visible FF5 panel.
         if (internalStateStream) {
             // Native reasoning may discuss the phrase "Internal States" as
             // part of BOLT. Do not mistake displayed reasoning for the final
@@ -1882,7 +1886,7 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                 }
                 var cleanContent = cleanStructuredContent(rawContent);
                 var fullContent = frontend === 'janitor' && useFF5Display
-                    ? displayJanitorInternalState(cleanContent)
+                    ? stripInternalState(cleanContent)
                     : displayGenericInternalState(cleanContent, frontend, useFF5Display);
 
                 if (exposeReasoning && rawReasoning) {
