@@ -138,6 +138,9 @@ function getThinkingProfile(nimModelId) {
     if (lower.indexOf('deepseek-v4') !== -1) return 'deepseek-v4';
     if (lower.indexOf('deepseek') !== -1) return 'native-reasoning';
     if (lower.indexOf('glm') !== -1) return 'enable-thinking';
+    // Kimi K3 uses NVIDIA's top-level reasoning_effort control. It does not
+    // use the legacy Kimi chat_template_kwargs.thinking toggle.
+    if (lower.indexOf('kimi-k3') !== -1) return 'kimi-k3';
     if (isKimiModel(lower)) return 'thinking';
     if (lower.indexOf('qwen') !== -1 || lower.indexOf('qwq') !== -1) return 'qwen';
     if (lower.indexOf('nemotron') !== -1) return 'nemotron';
@@ -196,7 +199,9 @@ function buildThinkingConfig(nimModelId, requestBody, defaults) {
     var effort = normalizeReasoningEffort(
         requestBody.reasoning_effort !== undefined
             ? requestBody.reasoning_effort
-            : clientKwargs.reasoning_effort,
+            : (extraBody.reasoning_effort !== undefined
+                ? extraBody.reasoning_effort
+                : clientKwargs.reasoning_effort),
         defaults.effort || REASONING_EFFORT
     );
     var budget = parsePositiveInteger(
@@ -220,6 +225,22 @@ function buildThinkingConfig(nimModelId, requestBody, defaults) {
         delete kwargs.thinking;
         delete kwargs.reasoning_effort;
         kwargs.enable_thinking = enabled;
+    } else if (profile === 'kimi-k3') {
+        // NVIDIA Kimi K3 reasons natively. The supported control is the
+        // root-level reasoning_effort field (low/high/max), not a template
+        // boolean. Treat reasoning as enabled regardless of the universal
+        // ENABLE_THINKING_MODE switch because K3 does not expose an off mode.
+        enabled = true;
+        delete kwargs.thinking;
+        delete kwargs.enable_thinking;
+        delete kwargs.reasoning_effort;
+
+        var kimiEffort = effort;
+        if (kimiEffort === 'xhigh') kimiEffort = 'max';
+        if (kimiEffort === 'medium') kimiEffort = 'high';
+        if (kimiEffort === 'none') kimiEffort = 'low';
+        topLevel.reasoning_effort = kimiEffort;
+        effort = kimiEffort;
     } else if (profile === 'thinking') {
         delete kwargs.enable_thinking;
         delete kwargs.reasoning_effort;
