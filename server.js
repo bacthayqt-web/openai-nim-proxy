@@ -707,13 +707,26 @@ function applyFrontendDisplay(text, frontend, enabled) {
 function findInternalStateStart(input) {
     var text = String(input || '');
     var candidates = [];
+    var stateSectionNames = "NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD";
     var patterns = [
+        // Preferred FF5 state transport/comment and master containers.
         /<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/i,
         /<internal[_\s-]*states?\b/i,
-        /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,100}INTERNAL\s+STATES?\b/i,
+
+        // Some models echo one of the individual state-engine tags instead of
+        // the master <internal_states> wrapper. Treat those as state tails too.
+        /<internal_(?:dndsim|gmnotebook|bondtracker|chekhovguntracker|npcthoughts|worldsim|inventory|quest|faction|agenda|location)\b/i,
+
+        // Native FF5 details output, including malformed output that starts at
+        // an individual state section instead of the master INTERNAL STATES row.
+        /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,120}INTERNAL\s+STATES?\b/i,
+        new RegExp('<summary\\b[^>]*>[^<\\n]{0,160}(?:' + stateSectionNames + ')\\b', 'i'),
+
+        // Markdown/plaintext variants. Keep these line-anchored so ordinary
+        // narrative mentions such as "the world sim changed" are not captured.
         /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b/im,
-        /(?:^|\n)[ \t]*(?:\*\*)?\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)\](?:\*\*)?/im,
-        /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|INVENTORY, FEATS & TITLES)\b/im
+        new RegExp('(?:^|\\n)[ \t]*(?:\\*\\*)?\\[(?:' + stateSectionNames + ')\\](?:\\*\\*)?', 'im'),
+        new RegExp('(?:^|\\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\\*\\*|__)?(?:[^A-Za-z0-9\\n]{0,4})?(?:' + stateSectionNames + ')\\b', 'im')
     ];
 
     patterns.forEach(function(pattern) {
@@ -723,6 +736,16 @@ function findInternalStateStart(input) {
 
     if (candidates.length === 0) return -1;
     var start = Math.min.apply(Math, candidates);
+
+    // If the first recognized item is a nested summary, include its opening
+    // <details> wrapper so Janitor never sees a dangling HTML tag before the
+    // proxy-generated think box.
+    if (text.slice(start, start + 8).toLowerCase() === '<summary') {
+        var detailsStart = text.toLowerCase().lastIndexOf('<details', start);
+        if (detailsStart !== -1 && start - detailsStart <= 1024) {
+            start = detailsStart;
+        }
+    }
 
     // Generic FF5 output wraps Internal States in GFX markers. Include the
     // opening wrapper in the hidden block, but do not consume unrelated phone,
@@ -749,6 +772,10 @@ function normalizeJanitorInternalState(input) {
     if (!state) return '';
 
     var body = state
+        // A few models occasionally fence their state tail even though the
+        // preset asks them not to. Strip fence-only lines before normalizing.
+        .replace(/^\s*```(?:markdown|md|text|html)?\s*$/gim, '')
+        .replace(/^\s*```\s*$/gim, '')
         .replace(/<think\b[^>]*>/gi, '')
         .replace(/<\/think\s*>/gi, '')
         .replace(/<!--\s*GFX_START\s*-->/gi, '')

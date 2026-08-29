@@ -134,6 +134,34 @@ async function runFrontendStream(contents, frontend, transportCuts) {
     assert(streamedHtml.content.includes('<think>'));
     assert(streamedHtml.content.includes('### INTERNAL STATES'));
 
+    // Models do not always emit the master state heading. Janitor should still
+    // capture individual Markdown/HTML state sections without touching the
+    // model reasoning channel or prompt instructions.
+    const streamedSectionOnly = await runFrontendStream([
+        'Narrative paragraph.\n\n',
+        '#### NPC AGENDAS\n- Mara | Agenda: investigate'
+    ], 'janitor', [2, 7, 3, 19]);
+    assert(streamedSectionOnly.content.includes('Narrative paragraph.'));
+    assert(streamedSectionOnly.content.includes('<think>'));
+    assert(streamedSectionOnly.content.includes('NPC AGENDAS'));
+
+    const streamedNestedDetails = await runFrontendStream([
+        'Narrative paragraph.\n',
+        '<details><summary>NPC LOCATIONS</summary>\n- Mara: library</details>'
+    ], 'janitor', [5, 11, 1, 23]);
+    assert(streamedNestedDetails.content.includes('Narrative paragraph.'));
+    assert(streamedNestedDetails.content.includes('<think>'));
+    assert(streamedNestedDetails.content.includes('NPC LOCATIONS'));
+    assert(!streamedNestedDetails.content.includes('<details>'), 'Raw state details must not leak into Janitor');
+
+    const streamedIndividualTag = await runFrontendStream([
+        'Narrative paragraph.\n',
+        '<internal_npcthoughts>\n[INTERNAL THOUGHTS]\n- Mara: leave now\n</internal_npcthoughts>'
+    ], 'janitor', [4, 13, 2, 17]);
+    assert(streamedIndividualTag.content.includes('Narrative paragraph.'));
+    assert(streamedIndividualTag.content.includes('<think>'));
+    assert(streamedIndividualTag.content.includes('INTERNAL THOUGHTS'));
+
     const streamedPopIn = await runFrontendStream([
         'Narrative.\n',
         '<!-- GFX_START --><div>📱 Phone message</div><!-- GFX_END -->'
