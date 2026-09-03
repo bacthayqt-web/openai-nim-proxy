@@ -111,7 +111,9 @@ async function runFrontendStream(contents, frontend, transportCuts) {
     const stripping = helpers.createJanitorStateStream();
     assert.strictEqual(stripping.push('Narrative.\n\n### INTERNAL STATES\n[QUESTS]').trim(), 'Narrative.');
     assert.strictEqual(stripping.push('\nSecret'), '');
-    assert.strictEqual(stripping.finish(), '', 'Detected Janitor state tail must be removed completely');
+    const wrappedState = stripping.finish();
+    assert(wrappedState.includes('<think>'), 'Detected Janitor state tail must be hidden in a think block');
+    assert(wrappedState.includes('#### QUESTS'));
 
     const streamedMarkdown = await runFrontendStream([
         'Narrative paragraph.',
@@ -119,7 +121,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
         'NAL STATES\n[GM NOTEBOOK]\nSecret -- note'
     ], 'janitor', [1, 2, 5, 3, 13, 8, 21]);
     assert(streamedMarkdown.content.includes('Narrative paragraph.'));
-    assertNoInternalState(streamedMarkdown.content);
+    assert(streamedMarkdown.content.includes('<think>'));
+    assert(streamedMarkdown.content.includes('#### GM NOTEBOOK'));
 
     const streamedHtml = await runFrontendStream([
         'Narrative paragraph.\n',
@@ -128,7 +131,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
         'states><details><summary>INTERNAL STATES</summary>Secret</details></internal_states><!-- GFX_END -->'
     ], 'janitor', [7, 1, 19, 4, 2, 33]);
     assert(streamedHtml.content.includes('Narrative paragraph.'));
-    assertNoInternalState(streamedHtml.content);
+    assert(streamedHtml.content.includes('<think>'));
+    assert(streamedHtml.content.includes('### INTERNAL STATES'));
 
     const streamedPopIn = await runFrontendStream([
         'Narrative.\n',
@@ -169,8 +173,9 @@ async function runFrontendStream(contents, frontend, transportCuts) {
         status() { return this; }
     }, 'janitor', true);
     const nonStreamContent = nonStreamJson.choices[0].message.content;
-    assert.strictEqual(nonStreamContent, 'Narrative.');
-    assertNoInternalState(nonStreamContent);
+    assert(nonStreamContent.includes('Narrative.'));
+    assert(nonStreamContent.includes('<think>'));
+    assert(nonStreamContent.includes('#### DND TASK SIM'));
 
     let genericNonStreamJson = null;
     helpers.handleNonStream({

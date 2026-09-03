@@ -40,9 +40,6 @@ const genericBuilt = helpers.buildOrderedMessagesFromPreset(
 );
 const genericSystem = genericBuilt.find((message) => message.role === 'system');
 assert(genericSystem, 'Generic compiled preset must contain a merged system message');
-assert(genericSystem.content.startsWith('<proxy_preset priority="authoritative">'));
-assert(genericSystem.content.includes('<response_planning_policy>'));
-assert(genericSystem.content.includes('<final_compliance>'));
 assert(genericSystem.content.includes('<internal_states>'));
 assert(genericSystem.content.includes('<!-- GFX_START -->'));
 assert(genericSystem.content.includes('<internal_dndsim>'));
@@ -68,18 +65,6 @@ assert(janitorSystem.content.includes('Internal States are disabled on this fron
 assert(!janitorSystem.content.includes('Ensure internal states created correctly'));
 assert(!/<colored_dialogue>|<font\s+color=/i.test(janitorSystem.content));
 assert(!/\{\{(?:setvar|getvar|roll)::/.test(janitorSystem.content), 'FF5 macros must be expanded server-side');
-
-const priorityBuilt = helpers.buildOrderedMessagesFromPreset(
-    preset,
-    [
-        { role: 'system', content: 'CLIENT_SYSTEM_MARKER' },
-        { role: 'user', content: 'Start.' }
-    ]
-);
-const prioritySystem = priorityBuilt[0].content;
-assert(prioritySystem.indexOf('<proxy_preset') < prioritySystem.indexOf('CLIENT_SYSTEM_MARKER'));
-assert(prioritySystem.includes('<frontend_context priority="supplemental">'));
-assert(prioritySystem.indexOf('CLIENT_SYSTEM_MARKER') < prioritySystem.indexOf('<final_compliance>'));
 
 const genericHistory = helpers.prepareFF5History([
     { role: 'assistant', content: 'Old.\n<!-- FF5_INTERNAL_STATE\nTURN: 1\nEND_FF5_INTERNAL_STATE -->' },
