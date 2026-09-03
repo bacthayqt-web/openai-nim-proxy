@@ -118,7 +118,8 @@ every model like GLM:
 | --- | --- |
 | DeepSeek V4 | `thinking` plus `reasoning_effort` |
 | GLM | `enable_thinking` |
-| Kimi | `thinking` |
+| Kimi K3 | top-level `reasoning_effort` (`low`, `high`, or `max`); native reasoning is always enabled |
+| Earlier Kimi models | `thinking` |
 | Qwen/QwQ | `enable_thinking` plus top-level `reasoning_effort` |
 | Nemotron | `enable_thinking` plus optional `reasoning_budget` |
 | Inkling | `reasoning_effort` (`none` when disabled) |
@@ -129,6 +130,20 @@ every model like GLM:
 Recognized per-request options in root `chat_template_kwargs`, SDK-style
 `extra_body.chat_template_kwargs`, and top-level `reasoning_effort` or
 `reasoning_budget` are normalized automatically.
+
+### Preset priority
+
+The proxy compiles Frankenstein first inside an authoritative
+`<proxy_preset>` section. Client-supplied system messages are preserved inside
+a later, supplemental `<frontend_context>` section rather than being sent as
+peer-level system instructions. A final compliance rule requires the output to
+follow the preset even when the model uses its own native reasoning method.
+
+For Kimi K3, keep `REASONING_EFFORT=high` for a good roleplay/latency balance.
+The proxy intentionally does not send K3 the older
+`chat_template_kwargs.thinking` flag or try to force its private reasoning trace
+to reproduce Frankenstein's BOLT steps. BOLT is enforced as requirements on
+the resulting response instead.
 
 Reasoning responses are normalized from `reasoning_content`, `reasoning`,
 `thinking_content`, `thinking`, `analysis`, or structured

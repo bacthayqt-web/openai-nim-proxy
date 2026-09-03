@@ -33,8 +33,17 @@ assert.deepStrictEqual(
     config('z-ai/glm-5.2', {}, true).chat_template_kwargs,
     { enable_thinking: true }
 );
+const kimiK3 = config('moonshotai/kimi-k3', {}, true, 'high');
+assert.strictEqual(kimiK3.chat_template_kwargs, undefined);
+assert.deepStrictEqual(kimiK3.top_level, { reasoning_effort: 'high' });
+assert.strictEqual(kimiK3.enabled, true, 'Kimi K3 native reasoning cannot be disabled');
+
+const kimiK3DisabledRequest = config('moonshotai/kimi-k3', { thinking: false }, false, 'high');
+assert.strictEqual(kimiK3DisabledRequest.enabled, true);
+assert.deepStrictEqual(kimiK3DisabledRequest.top_level, { reasoning_effort: 'high' });
+
 assert.deepStrictEqual(
-    config('moonshotai/kimi-k3', {}, true).chat_template_kwargs,
+    config('moonshotai/kimi-k2.5', {}, true).chat_template_kwargs,
     { thinking: true }
 );
 
