@@ -491,7 +491,12 @@ function createThinkingStripStream() {
 // the immersive_graphics prompt) while everything else in the preset stays
 // byte-for-byte identical across frontends.
 var PROMPT_OVERRIDES = {
-    janitor: loadPreset('overrides.janitor') || {}
+    janitor: Object.assign(
+        {},
+        loadPreset('overrides.janitor') || {},
+        loadPreset('overrides.janitor-state') || {},
+        loadPreset('overrides.janitor-jailbreak') || {}
+    )
 };
 
 // Internal State prompt ids are retained as a named group for tests and future
@@ -737,11 +742,15 @@ function findInternalStateStart(input) {
 
 function stripInternalState(input) {
     var text = String(input || '');
-    var start = findInternalStateStart(text);
-    if (start === -1) return text;
+    var parts = splitJanitorResponseContent(text);
+    if (!parts.state) return text;
 
-    var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
-    return narrative.trimEnd();
+    var visible = parts.narrative;
+    if (parts.thinking.length > 0) {
+        visible = THINK_OPEN + '\n' + parts.thinking.join('\n\n') + '\n' + THINK_CLOSE +
+            (visible ? '\n\n' + visible : '');
+    }
+    return visible.trimEnd();
 }
 
 function normalizeJanitorInternalState(input) {
@@ -776,24 +785,125 @@ function wrapJanitorInternalState(input) {
     return markdown ? THINK_OPEN + '\n' + markdown + '\n' + THINK_CLOSE : '';
 }
 
-function displayJanitorInternalState(input) {
-    var text = String(input || '');
-    var start = findInternalStateStart(text);
-    if (start === -1) return text;
-
-    var narrative = text.slice(0, start).replace(/[ \t]+$/g, '').replace(/\n{3,}$/g, '\n\n');
-    var state = wrapJanitorInternalState(text.slice(start));
-    return narrative.trimEnd() + (narrative.trim() && state ? '\n\n' : '') + state;
+function hideJanitorInternalStateComment(input) {
+    var markdown = normalizeJanitorInternalState(input);
+    if (markdown) markdown = markdown.replace(/--+/g, '—');
+    return markdown
+        ? '<!-- FF5_INTERNAL_STATE\n' + markdown + '\nEND_FF5_INTERNAL_STATE -->'
+        : '';
 }
 
-// Janitor hides the Markdown state in a think block for display. Before the
-// next model call, restore a semantic container so FF5 can reliably locate and
-// update the newest record without treating it as native chain-of-thought.
+// A Janitor think box must lead the assistant message. If it appears after
+// visible prose, Janitor renders it as ordinary message text. Pull both native
+// provider thinking and FF5's final state record out of the content so they can
+// be merged into one leading box without exposing the state at the bottom.
+function splitJanitorResponseContent(input) {
+    var text = String(input || '');
+    var thinking = [];
+    var state = '';
+    var rebuilt = '';
+    var cursor = 0;
+    var thinkPattern = /<(think|thinking|reasoning|analysis)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+    var match;
+
+    function findPrimaryStateStart(value) {
+        var source = String(value || '');
+        var indexes = [];
+        var patterns = [
+            /<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/i,
+            /<internal[_\s-]*states?\b/i,
+            /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,100}INTERNAL\s+STATES?\b/i,
+            /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b/im
+        ];
+        patterns.forEach(function(pattern) {
+            var found = pattern.exec(source);
+            if (found) indexes.push(found.index);
+        });
+        return indexes.length ? Math.min.apply(Math, indexes) : -1;
+    }
+
+    while ((match = thinkPattern.exec(text)) !== null) {
+        var before = text.slice(cursor, match.index);
+        var body = match[2] || '';
+        var stateStart = findPrimaryStateStart(body);
+        var blockIsLeading = (rebuilt + before).trim() === '';
+
+        rebuilt += before;
+        if (stateStart !== -1) {
+            var nativeThinking = body.slice(0, stateStart).trim();
+            if (nativeThinking) thinking.push(nativeThinking);
+            state = normalizeJanitorInternalState(body.slice(stateStart)) || state;
+        } else if (blockIsLeading) {
+            if (body.trim()) thinking.push(body.trim());
+        } else {
+            rebuilt += match[0];
+        }
+        cursor = thinkPattern.lastIndex;
+    }
+    rebuilt += text.slice(cursor);
+
+    // Compatibility fallback: capture older or malformed responses that still
+    // append a Markdown state tail instead of placing it in native reasoning.
+    var trailingStateStart = findInternalStateStart(rebuilt);
+    if (trailingStateStart !== -1) {
+        state = normalizeJanitorInternalState(rebuilt.slice(trailingStateStart)) || state;
+        rebuilt = rebuilt.slice(0, trailingStateStart);
+    }
+
+    return {
+        narrative: rebuilt
+            .replace(/^[\r\n]+/, '')
+            .replace(/[ \t]+$/g, '')
+            .replace(/\n{3,}$/g, '\n\n')
+            .trimEnd(),
+        thinking: thinking,
+        state: state
+    };
+}
+
+function composeJanitorResponse(input, reasoning) {
+    var original = String(input || '');
+    var parts = splitJanitorResponseContent(original);
+    var hidden = [];
+    var cleanReasoning = cleanStructuredContent(reasoning || '');
+
+    function addHidden(value) {
+        var clean = String(value || '').trim();
+        if (!clean || hidden.indexOf(clean) !== -1) return;
+        hidden.push(clean);
+    }
+
+    addHidden(cleanReasoning);
+    parts.thinking.forEach(addHidden);
+    addHidden(parts.state);
+
+    if (hidden.length === 0) return original;
+
+    var result = THINK_OPEN + '\n' + hidden.join('\n\n') + '\n' + THINK_CLOSE;
+    if (parts.narrative) result += '\n\n' + parts.narrative;
+    return result;
+}
+
+function displayJanitorInternalState(input) {
+    return composeJanitorResponse(input, '');
+}
+
+// Before the next model call, move the state out of Janitor's leading display
+// box and back to a semantic tail container. This keeps native thinking intact
+// while allowing FF5 to locate and update the newest state record reliably.
 function restoreJanitorStateForContext(input) {
-    return String(input || '').replace(
-        /<think\b[^>]*>\s*(###\s*INTERNAL\s+STATES[\s\S]*?)<\/think\s*>/gi,
-        '<internal_states>\n$1\n</internal_states>'
-    );
+    var text = String(input || '');
+    var parts = splitJanitorResponseContent(text);
+    if (!parts.state) return text;
+
+    var visible = parts.narrative;
+    if (parts.thinking.length > 0) {
+        visible = THINK_OPEN + '\n' + parts.thinking.join('\n\n') + '\n' + THINK_CLOSE +
+            (visible ? '\n\n' + visible : '');
+    }
+
+    var semanticState = '<internal_states>\n' + parts.state + '\n</internal_states>';
+    return visible.trimEnd() + (visible.trim() ? '\n\n' : '') + semanticState;
 }
 
 function escapeHtml(input) {
@@ -1038,7 +1148,7 @@ function createInternalStateStream(frontend) {
             }
 
             var state = frontend === 'janitor'
-                ? wrapJanitorInternalState(stateBuffer)
+                ? hideJanitorInternalStateComment(stateBuffer)
                 : normalizeGenericInternalState(stateBuffer);
             stateBuffer = '';
             stateStarted = false;
@@ -1052,7 +1162,89 @@ function createInternalStateStream(frontend) {
 }
 
 function createJanitorStateStream() {
-    return createInternalStateStream('janitor');
+    var fallbackStateStream = createInternalStateStream('janitor');
+    var mode = 'detect';
+    var prefixPending = '';
+    var thinkPending = '';
+    var closeMarker = '';
+
+    function pushLeadingThink(chunk) {
+        thinkPending += String(chunk || '');
+        var closeAt = thinkPending.toLowerCase().indexOf(closeMarker);
+        if (closeAt !== -1) {
+            var endAt = closeAt + closeMarker.length;
+            var complete = thinkPending.slice(0, endAt);
+            var remainder = thinkPending.slice(endAt);
+            thinkPending = '';
+            mode = 'normal';
+            return complete + fallbackStateStream.push(remainder);
+        }
+
+        var keep = Math.max(0, closeMarker.length - 1);
+        if (thinkPending.length <= keep) return '';
+        var safeLength = thinkPending.length - keep;
+        var safe = thinkPending.slice(0, safeLength);
+        thinkPending = thinkPending.slice(safeLength);
+        return safe;
+    }
+
+    return {
+        push: function(chunk) {
+            var content = String(chunk || '');
+            if (!content) return '';
+
+            if (mode === 'normal') return fallbackStateStream.push(content);
+            if (mode === 'think') return pushLeadingThink(content);
+
+            prefixPending += content;
+            var trimmed = prefixPending.replace(/^\s+/, '');
+            if (!trimmed) return '';
+
+            var lower = trimmed.toLowerCase();
+            var tagNames = ['think', 'thinking', 'reasoning', 'analysis'];
+            var possibleTag = tagNames.some(function(name) {
+                var prefix = '<' + name;
+                return prefix.indexOf(lower) === 0 || lower.indexOf(prefix) === 0;
+            });
+            var opening = /^\s*<(think|thinking|reasoning|analysis)\b[^>]*>/i.exec(prefixPending);
+
+            if (opening) {
+                mode = 'think';
+                closeMarker = '</' + opening[1].toLowerCase() + '>';
+                var leading = prefixPending;
+                prefixPending = '';
+                return pushLeadingThink(leading);
+            }
+
+            if (possibleTag && lower.indexOf('>') === -1 && lower.length <= 64) {
+                return '';
+            }
+
+            mode = 'normal';
+            var ordinary = prefixPending;
+            prefixPending = '';
+            return fallbackStateStream.push(ordinary);
+        },
+        finish: function() {
+            if (mode === 'detect') {
+                var prefix = prefixPending;
+                prefixPending = '';
+                mode = 'normal';
+                var prefixOutput = fallbackStateStream.push(prefix);
+                return prefixOutput + fallbackStateStream.finish();
+            }
+            if (mode === 'think') {
+                var unfinishedThink = thinkPending;
+                thinkPending = '';
+                mode = 'normal';
+                return unfinishedThink + fallbackStateStream.finish();
+            }
+            return fallbackStateStream.finish();
+        },
+        hasState: function() {
+            return fallbackStateStream.hasState();
+        }
+    };
 }
 
 // FIX 1: Merge System Messages in Presets safely
@@ -1074,9 +1266,13 @@ function buildOrderedMessagesFromPreset(preset, originalMessages, promptOverride
             var hasOverride = Object.prototype.hasOwnProperty.call(overrides, p.identifier);
             var content = hasOverride ? overrides[p.identifier] : p.content;
             if (internalStatesDisabled && p.identifier === 'jailbreak') {
+                var disabledStateNotice = 'Internal States are disabled on this frontend; never generate or append them.';
                 content = content.replace(
                     /Ensure internal states created correctly at end of every response\s*-\s*no need verbally to respond to this message\./i,
-                    'Internal States are disabled on this frontend; never generate or append them.'
+                    disabledStateNotice
+                ).replace(
+                    /Ensure Internal States are created correctly as the final part of private reasoning before the reasoning\/think channel closes and before visible narrative\. Never append Internal States after the narrative\./i,
+                    disabledStateNotice
                 );
             }
             return {
@@ -1145,7 +1341,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         content: 'CRITICAL INSTRUCTION: Respond directly as text, never as JSON or a structured content array. Use blank lines between every narrative paragraph. Speech must use "double quotes"; actions and narration use *single asterisks*; emphasis uses **double asterisks**; thoughts use `backticks`.' +
             (allowHtmlUI
                 ? '\n\nFF5 UI EXCEPTION: The Pop-in Graphics and Internal States blocks must use the raw inline HTML required by their own templates. Do not put those HTML blocks inside Markdown code fences. INTERNAL STATE FORMAT LOCK: Always use the preset\'s native <internal_states> + nested <details>/<summary> HTML structure, even if older assistant messages contain Markdown state headings. Never imitate Markdown Internal States on generic/Chub clients.'
-                : '\n\nJANITOR RENDERING: Use Markdown for visible narrative, Pop-in Graphics, and the Internal States format supplied by the Janitor overrides. Never output raw HTML/CSS/details tags for Janitor. Append the complete Markdown Internal States record at the end; the server will place that record inside a <think> block for display.')
+                : '\n\nJANITOR RENDERING: Use Markdown for visible narrative and Pop-in Graphics. Never output raw HTML/CSS/details tags for Janitor. Put the complete Markdown Internal States record at the end of private reasoning, before the reasoning/think channel closes and before visible narrative. Never append Internal States after the visible response.')
     };
 
     var hasFormattingInstruction = messages.some(
@@ -1618,7 +1814,9 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     var gfxStart = '<!-- GFX_START -->';
     var gfxEnd = '<!-- GFX_END -->';
     var internalStateStream = useFF5Display
-        ? createInternalStateStream(frontend)
+        ? (frontend === 'janitor'
+            ? createJanitorStateStream()
+            : createInternalStateStream(frontend))
         : null;
     var thinkingStripStream = !exposeReasoning
         ? createThinkingStripStream()
@@ -1691,9 +1889,9 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
             if (delta.content === '') return;
         }
 
-        // Hold a possible state tail until completion. Janitor receives a
-        // Markdown state record inside a think block; generic clients receive
-        // one normalized visible FF5 panel.
+        // Hold a possible misplaced state tail until completion. Janitor gets
+        // a hidden-comment fallback (never a broken trailing think box), while
+        // generic clients receive one normalized visible FF5 panel.
         if (internalStateStream) {
             // Native reasoning may discuss the phrase "Internal States" as
             // part of BOLT. Do not mistake displayed reasoning for the final
@@ -1881,13 +2079,18 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                     rawContent = stripThinkBlocks(rawContent);
                 }
                 var cleanContent = cleanStructuredContent(rawContent);
-                var fullContent = frontend === 'janitor' && useFF5Display
-                    ? displayJanitorInternalState(cleanContent)
-                    : displayGenericInternalState(cleanContent, frontend, useFF5Display);
-
-                if (exposeReasoning && rawReasoning) {
-                    var cleanReasoning = cleanStructuredContent(rawReasoning);
-                    fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
+                var fullContent;
+                if (frontend === 'janitor' && useFF5Display) {
+                    fullContent = composeJanitorResponse(
+                        cleanContent,
+                        exposeReasoning ? rawReasoning : ''
+                    );
+                } else {
+                    fullContent = displayGenericInternalState(cleanContent, frontend, useFF5Display);
+                    if (exposeReasoning && rawReasoning) {
+                        var cleanReasoning = cleanStructuredContent(rawReasoning);
+                        fullContent = '\u003Cthink\u003E\n' + cleanReasoning + '\n\u003C/think\u003E\n\n' + fullContent;
+                    }
                 }
 
                 var outputMessage = Object.assign({}, upstreamMessage, {
@@ -1973,6 +2176,9 @@ module.exports._test = {
     createThinkingStripStream: createThinkingStripStream,
     normalizeJanitorInternalState: normalizeJanitorInternalState,
     wrapJanitorInternalState: wrapJanitorInternalState,
+    hideJanitorInternalStateComment: hideJanitorInternalStateComment,
+    splitJanitorResponseContent: splitJanitorResponseContent,
+    composeJanitorResponse: composeJanitorResponse,
     displayJanitorInternalState: displayJanitorInternalState,
     restoreJanitorStateForContext: restoreJanitorStateForContext,
     findInternalStateStart: findInternalStateStart,

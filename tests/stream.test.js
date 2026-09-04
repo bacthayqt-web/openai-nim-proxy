@@ -11,6 +11,19 @@ function assertNoInternalState(text) {
     assert(!/(?:^|\n)\s*\[(?:NPC AGENDAS|WORLD SIM|GM NOTEBOOK|DND TASK SIM|INTERNAL THOUGHTS)\]/im.test(text), 'Janitor output must not contain state sections');
 }
 
+function assertLeadingStateBox(text, narrativeText, stateText) {
+    const openAt = text.indexOf('<think>');
+    const closeAt = text.indexOf('</think>');
+    const narrativeAt = text.indexOf(narrativeText);
+    const stateAt = text.indexOf(stateText);
+
+    assert.strictEqual(openAt, 0, 'Janitor think box must lead the message');
+    assert(closeAt > openAt, 'Janitor think box must close');
+    assert(stateAt > openAt && stateAt < closeAt, 'Internal States must be inside the leading think box');
+    assert(narrativeAt > closeAt, 'Visible narrative must follow the think box');
+    assert.strictEqual((text.match(/<think>/g) || []).length, 1, 'Janitor output must contain one think box');
+}
+
 function makeEvent(content) {
     return 'data: ' + JSON.stringify({
         choices: [{ delta: { content } }]
@@ -64,6 +77,26 @@ async function runFrontendStream(contents, frontend, transportCuts) {
 }
 
 (async function main() {
+    const liveInput = new PassThrough();
+    const liveWrites = [];
+    let resolveLiveEnd;
+    const liveEnded = new Promise((resolve) => { resolveLiveEnd = resolve; });
+    const liveRes = {
+        headersSent: false,
+        setHeader() {},
+        write(chunk) { liveWrites.push(String(chunk)); },
+        end() { resolveLiveEnd(); }
+    };
+    helpers.handleStream(liveInput, liveRes, 'janitor', true);
+    liveInput.write(makeEvent('N'.repeat(600)));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert(
+        parseOutput(liveWrites).length > 0,
+        'Janitor narrative must begin streaming before the upstream response ends'
+    );
+    liveInput.end('data: [DONE]\n\n');
+    await liveEnded;
+
     const visibleMarkdown = helpers.hideJanitorInternalState(
         'Narrative.\n\n### INTERNAL STATES\n[GM NOTEBOOK]\nSecret -- unfinished'
     );
@@ -112,7 +145,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
     assert.strictEqual(stripping.push('Narrative.\n\n### INTERNAL STATES\n[QUESTS]').trim(), 'Narrative.');
     assert.strictEqual(stripping.push('\nSecret'), '');
     const wrappedState = stripping.finish();
-    assert(wrappedState.includes('<think>'), 'Detected Janitor state tail must be hidden in a think block');
+    assert(wrappedState.includes('<!-- FF5_INTERNAL_STATE'), 'A misplaced Janitor state tail must fall back to a hidden comment');
+    assert(!wrappedState.includes('<think>'), 'A trailing state must not create a broken end-of-message think box');
     assert(wrappedState.includes('#### QUESTS'));
 
     const streamedMarkdown = await runFrontendStream([
@@ -121,7 +155,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
         'NAL STATES\n[GM NOTEBOOK]\nSecret -- note'
     ], 'janitor', [1, 2, 5, 3, 13, 8, 21]);
     assert(streamedMarkdown.content.includes('Narrative paragraph.'));
-    assert(streamedMarkdown.content.includes('<think>'));
+    assert(streamedMarkdown.content.includes('<!-- FF5_INTERNAL_STATE'));
+    assert(!streamedMarkdown.content.includes('<think>'));
     assert(streamedMarkdown.content.includes('#### GM NOTEBOOK'));
 
     const streamedHtml = await runFrontendStream([
@@ -131,7 +166,8 @@ async function runFrontendStream(contents, frontend, transportCuts) {
         'states><details><summary>INTERNAL STATES</summary>Secret</details></internal_states><!-- GFX_END -->'
     ], 'janitor', [7, 1, 19, 4, 2, 33]);
     assert(streamedHtml.content.includes('Narrative paragraph.'));
-    assert(streamedHtml.content.includes('<think>'));
+    assert(streamedHtml.content.includes('<!-- FF5_INTERNAL_STATE'));
+    assert(!streamedHtml.content.includes('<think>'));
     assert(streamedHtml.content.includes('### INTERNAL STATES'));
 
     const streamedPopIn = await runFrontendStream([
@@ -176,6 +212,7 @@ async function runFrontendStream(contents, frontend, transportCuts) {
     assert(nonStreamContent.includes('Narrative.'));
     assert(nonStreamContent.includes('<think>'));
     assert(nonStreamContent.includes('#### DND TASK SIM'));
+    assertLeadingStateBox(nonStreamContent, 'Narrative.', '### INTERNAL STATES');
 
     let genericNonStreamJson = null;
     helpers.handleNonStream({

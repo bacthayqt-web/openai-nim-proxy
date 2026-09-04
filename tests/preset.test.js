@@ -7,6 +7,14 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const preset = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'frankenstein.json'), 'utf8'));
 const janitorOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.janitor.json'), 'utf8'));
+const janitorStateOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.janitor-state.json'), 'utf8'));
+const janitorJailbreakOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.janitor-jailbreak.json'), 'utf8'));
+const combinedJanitorOverrides = Object.assign(
+    {},
+    janitorOverrides,
+    janitorStateOverrides,
+    janitorJailbreakOverrides
+);
 const helpers = require('../server')._test;
 
 const ids = preset.prompt_order;
@@ -47,7 +55,7 @@ assert(genericSystem.content.includes('<internal_dndsim>'));
 const janitorBuilt = helpers.buildOrderedMessagesFromPreset(
     preset,
     [{ role: 'user', content: 'Start.' }],
-    janitorOverrides,
+    combinedJanitorOverrides,
     helpers.internalStatePromptIds
 );
 const janitorSystem = janitorBuilt.find((message) => message.role === 'system');
@@ -65,6 +73,18 @@ assert(janitorSystem.content.includes('Internal States are disabled on this fron
 assert(!janitorSystem.content.includes('Ensure internal states created correctly'));
 assert(!/<colored_dialogue>|<font\s+color=/i.test(janitorSystem.content));
 assert(!/\{\{(?:setvar|getvar|roll)::/.test(janitorSystem.content), 'FF5 macros must be expanded server-side');
+
+const janitorStateBuilt = helpers.buildOrderedMessagesFromPreset(
+    preset,
+    [{ role: 'user', content: 'Start.' }],
+    combinedJanitorOverrides,
+    []
+);
+const janitorStateSystem = janitorStateBuilt.find((message) => message.role === 'system');
+assert(janitorStateSystem.content.includes('final part of private reasoning'));
+assert(janitorStateSystem.content.includes('Never append Internal States after the narrative'));
+assert(!janitorStateSystem.content.includes('<!-- FF5_INTERNAL_STATE'));
+assert(!janitorStateSystem.content.includes('created correctly at end of every response'));
 
 const genericHistory = helpers.prepareFF5History([
     { role: 'assistant', content: 'Old.\n<!-- FF5_INTERNAL_STATE\nTURN: 1\nEND_FF5_INTERNAL_STATE -->' },
@@ -84,6 +104,33 @@ const janitorHistory = helpers.prepareFF5History([
 ], true);
 assert.strictEqual(janitorHistory[0].content, 'Old.', 'Janitor hidden state must be removed from history');
 assert.strictEqual(janitorHistory[2].content, 'Recent.', 'Janitor visible state must be removed from history');
+
+const reorderedJanitorHistory = helpers.prepareFF5History([
+    {
+        role: 'assistant',
+        content: '<think>\n### INTERNAL STATES\n\n#### WORLD SIM\nOld event\n</think>\n\nOld narrative.'
+    },
+    { role: 'user', content: 'Next.' },
+    {
+        role: 'assistant',
+        content: '<think>\nNative reasoning.\n\n### INTERNAL STATES\n\n#### WORLD SIM\nRecent event\n</think>\n\nRecent narrative.'
+    },
+    { role: 'user', content: 'Continue.' }
+], false, 'janitor');
+assert.strictEqual(
+    reorderedJanitorHistory[0].content,
+    'Old narrative.',
+    'Pruning an old leading state box must preserve its visible narrative'
+);
+assert(reorderedJanitorHistory[2].content.includes('<think>\nNative reasoning.\n</think>'));
+assert(reorderedJanitorHistory[2].content.includes('Recent narrative.'));
+assert(reorderedJanitorHistory[2].content.includes('<internal_states>'));
+assert(reorderedJanitorHistory[2].content.includes('Recent event'));
+assert(
+    reorderedJanitorHistory[2].content.indexOf('Recent narrative.') <
+        reorderedJanitorHistory[2].content.indexOf('<internal_states>'),
+    'The restored semantic state must follow the narrative in model context'
+);
 
 assert.strictEqual(helpers.detectFrontend({ path: '/janitor/v1/chat/completions' }), 'janitor');
 assert.strictEqual(helpers.detectFrontend({ path: '/v1/chat/completions' }), 'default');
