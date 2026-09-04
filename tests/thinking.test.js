@@ -79,6 +79,43 @@ assert.strictEqual(
     'first\nsecond'
 );
 
+const splitK3History = helpers.splitLeadingReasoningFromContent(
+    '<think>\nPlan briefly.\n\n### INTERNAL STATES\n[WORLD SIM]\nEvent\n</think>\n\nVisible continuation.'
+);
+assert.strictEqual(
+    splitK3History.reasoning_content,
+    'Plan briefly.\n\n### INTERNAL STATES\n[WORLD SIM]\nEvent'
+);
+assert.strictEqual(splitK3History.content, 'Visible continuation.');
+
+const recoveredK3History = helpers.prepareKimiK3History([{
+    role: 'assistant',
+    content: '<think>\nNative K3 thought.\n\n### INTERNAL STATES\n[BONDS]\nA ↔ B\n</think>\n\nNarrative.'
+}]);
+assert.strictEqual(recoveredK3History[0].content, 'Narrative.');
+assert.strictEqual(
+    recoveredK3History[0].reasoning_content,
+    'Native K3 thought.\n\n### INTERNAL STATES\n[BONDS]\nA ↔ B'
+);
+
+const nativeK3HistoryWins = helpers.prepareKimiK3History([{
+    role: 'assistant',
+    reasoning_content: 'Provider-native history.',
+    content: '<think>Display copy that should not replace native history.</think>\n\nNarrative.'
+}]);
+assert.strictEqual(nativeK3HistoryWins[0].reasoning_content, 'Provider-native history.');
+assert.strictEqual(nativeK3HistoryWins[0].content, 'Narrative.');
+
+const nativeK3PlusDisplayState = helpers.prepareKimiK3History([{
+    role: 'assistant',
+    reasoning_content: 'Provider-native history.',
+    content: '<think>Provider-native history.\n\n### INTERNAL STATES\n[WORLD SIM]\nState only in display.</think>\n\nNarrative.'
+}]);
+assert.strictEqual(nativeK3PlusDisplayState[0].reasoning_content, 'Provider-native history.');
+assert(nativeK3PlusDisplayState[0].content.includes('Narrative.'));
+assert(nativeK3PlusDisplayState[0].content.includes('<internal_states>'));
+assert(nativeK3PlusDisplayState[0].content.includes('State only in display.'));
+
 let janitorJson = null;
 helpers.handleNonStream({
     choices: [{
@@ -97,6 +134,27 @@ helpers.handleNonStream({
 assert.strictEqual(
     janitorJson.choices[0].message.content,
     '<think>\nPrivate analysis.\n</think>\n\nFinal answer.'
+);
+
+let kimiK3Json = null;
+helpers.handleNonStream({
+    choices: [{
+        index: 0,
+        message: {
+            role: 'assistant',
+            reasoning_content: 'K3 preserved analysis.',
+            content: 'K3 final answer.'
+        },
+        finish_reason: 'stop'
+    }]
+}, 'moonshotai/kimi-k3', {
+    json(value) { kimiK3Json = value; },
+    status() { return this; }
+}, 'janitor', false);
+assert.strictEqual(kimiK3Json.choices[0].message.reasoning_content, 'K3 preserved analysis.');
+assert.strictEqual(
+    kimiK3Json.choices[0].message.content,
+    '<think>\nK3 preserved analysis.\n</think>\n\nK3 final answer.'
 );
 
 let janitorStateJson = null;
@@ -262,10 +320,36 @@ async function testLiteralLeadingStateThinkStreams() {
     assert(content.indexOf('Literal answer.') > closeAt);
 }
 
+async function testK3StreamPreservesReasoningMetadata() {
+    const input = new PassThrough();
+    const writes = [];
+    let resolveEnd;
+    const ended = new Promise((resolve) => { resolveEnd = resolve; });
+    const res = {
+        headersSent: false,
+        setHeader() {},
+        write(chunk) { writes.push(String(chunk)); },
+        end() { resolveEnd(); }
+    };
+
+    helpers.handleStream(input, res, 'janitor', false, 'moonshotai/kimi-k3');
+    input.end(
+        'data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: 'K3 stream trace.' } }] }) + '\n\n' +
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: 'K3 stream answer.' } }] }) + '\n\n' +
+        'data: [DONE]\n\n'
+    );
+    await ended;
+
+    const wire = writes.join('');
+    assert(wire.includes('\"reasoning_content\":\"K3 stream trace.\"'));
+    assert(wire.includes('<think>\\nK3 stream trace.'));
+}
+
 Promise.all([
     testStreamedReasoningAlias(),
     testStreamedReasoningWithState(),
-    testLiteralLeadingStateThinkStreams()
+    testLiteralLeadingStateThinkStreams(),
+    testK3StreamPreservesReasoningMetadata()
 ]).then(function() {
     console.log('thinking.test.js: all assertions passed');
 }).catch(function(error) {

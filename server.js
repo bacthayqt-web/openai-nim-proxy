@@ -20,6 +20,7 @@ var OPENROUTER_APP_NAME = String(process.env.OPENROUTER_APP_NAME || '').trim();
 var SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 var THINKING_MODE_CONFIGURED = process.env.ENABLE_THINKING_MODE !== undefined;
+var REASONING_EFFORT_CONFIGURED = process.env.REASONING_EFFORT !== undefined;
 var REASONING_EFFORT = normalizeReasoningEffort(process.env.REASONING_EFFORT, 'high');
 var REASONING_BUDGET = parsePositiveInteger(process.env.REASONING_BUDGET);
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
@@ -99,6 +100,11 @@ function isKimiModel(nimModelId) {
     return lower.indexOf('moonshotai') !== -1 || lower.indexOf('kimi') !== -1;
 }
 
+function isKimiK3Model(nimModelId) {
+    if (!nimModelId) return false;
+    return String(nimModelId).toLowerCase().indexOf('kimi-k3') !== -1;
+}
+
 function isDeepSeekModel(nimModelId) {
     if (!nimModelId) return false;
     return nimModelId.toLowerCase().indexOf('deepseek') !== -1;
@@ -140,7 +146,7 @@ function getThinkingProfile(nimModelId) {
     if (lower.indexOf('glm') !== -1) return 'enable-thinking';
     // Kimi K3 uses NVIDIA's top-level reasoning_effort control. It does not
     // use the legacy Kimi chat_template_kwargs.thinking toggle.
-    if (lower.indexOf('kimi-k3') !== -1) return 'kimi-k3';
+    if (isKimiK3Model(lower)) return 'kimi-k3';
     if (isKimiModel(lower)) return 'thinking';
     if (lower.indexOf('qwen') !== -1 || lower.indexOf('qwq') !== -1) return 'qwen';
     if (lower.indexOf('nemotron') !== -1) return 'nemotron';
@@ -196,14 +202,21 @@ function buildThinkingConfig(nimModelId, requestBody, defaults) {
     if (requestedEnabled === undefined) requestedEnabled = optionalBoolean(clientKwargs.enable_thinking);
     if (requestedEnabled !== undefined) enabled = requestedEnabled;
 
-    var effort = normalizeReasoningEffort(
-        requestBody.reasoning_effort !== undefined
-            ? requestBody.reasoning_effort
-            : (extraBody.reasoning_effort !== undefined
-                ? extraBody.reasoning_effort
-                : clientKwargs.reasoning_effort),
-        defaults.effort || REASONING_EFFORT
-    );
+    var requestEffort = requestBody.reasoning_effort !== undefined
+        ? requestBody.reasoning_effort
+        : (extraBody.reasoning_effort !== undefined
+            ? extraBody.reasoning_effort
+            : clientKwargs.reasoning_effort);
+    var effortFallback = defaults.effort !== undefined
+        ? defaults.effort
+        : REASONING_EFFORT;
+    if (profile === 'kimi-k3' && requestEffort === undefined &&
+        defaults.effort === undefined && !REASONING_EFFORT_CONFIGURED) {
+        // NVIDIA documents max as K3's native default. Do not silently
+        // downgrade it to this proxy's generic high fallback.
+        effortFallback = 'max';
+    }
+    var effort = normalizeReasoningEffort(requestEffort, effortFallback);
     var budget = parsePositiveInteger(
         requestBody.reasoning_budget !== undefined
             ? requestBody.reasoning_budget
@@ -1513,6 +1526,69 @@ function removeReasoningFields(container) {
     });
 }
 
+// Kimi K3 was trained to preserve assistant reasoning across turns. Janitor
+// and many OpenAI-compatible frontends only retain message.content, while this
+// proxy renders provider reasoning there as a leading <think> block. Recover
+// that block before FF5 history cleanup removes it, then send it upstream in
+// K3's native reasoning_content field and keep visible content free of the
+// duplicate display wrapper.
+function splitLeadingReasoningFromContent(input) {
+    var remaining = String(input || '');
+    var reasoningParts = [];
+    var pattern = /^\s*<(think|thinking|reasoning|analysis)\b[^>]*>([\s\S]*?)<\/\1\s*>\s*/i;
+    var match;
+
+    while ((match = pattern.exec(remaining)) !== null) {
+        var body = String(match[2] || '').trim();
+        if (body) reasoningParts.push(body);
+        remaining = remaining.slice(match[0].length);
+    }
+
+    return {
+        reasoning_content: reasoningParts.join('\n\n'),
+        content: remaining.replace(/^[\r\n]+/, '')
+    };
+}
+
+function prepareKimiK3History(messages) {
+    return (messages || []).map(function(message) {
+        if (!message || message.role !== 'assistant') return message;
+
+        var cloned = Object.assign({}, message);
+        var content = typeof message.content === 'string' ? message.content : '';
+        var split = splitLeadingReasoningFromContent(content);
+        var nativeReasoning = extractReasoning(message);
+        var recoveredReasoning = nativeReasoning || split.reasoning_content;
+
+        // If a previous proxy response included both native reasoning_content
+        // and the Janitor display <think> wrapper, strip only that leading
+        // display copy from content. Provider-native reasoning takes priority.
+        if (split.reasoning_content) {
+            cloned.content = split.content;
+
+            // composeJanitorResponse can move a misplaced FF5 state tail into
+            // the display think box even when the provider's original
+            // reasoning_content did not contain that state. Restore that state
+            // to semantic assistant content instead of silently dropping it.
+            if (nativeReasoning && findInternalStateStart(nativeReasoning) === -1) {
+                var displayParts = splitJanitorResponseContent(content);
+                if (displayParts.state) {
+                    var semanticState = '<internal_states>\n' + displayParts.state + '\n</internal_states>';
+                    cloned.content = split.content.trimEnd() +
+                        (split.content.trim() ? '\n\n' : '') + semanticState;
+                }
+            }
+        }
+
+        if (recoveredReasoning) {
+            removeReasoningFields(cloned);
+            cloned.reasoning_content = recoveredReasoning;
+        }
+
+        return cloned;
+    });
+}
+
 
 function validateAndSanitizeParams(temperature, max_tokens) {
     var sanitizedTemp = temperature;
@@ -1666,15 +1742,18 @@ app.post([
         }
 
         var frontend = detectFrontend(req);
-        var processedMessages = messages;
+        var historyMessages = provider === 'nim' && isKimiK3Model(upstreamModel)
+            ? prepareKimiK3History(messages)
+            : messages;
+        var processedMessages = historyMessages;
 
         if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
             var promptExclusions = PROMPT_EXCLUSIONS[frontend] || [];
             var dropAllInternalStates = false;
             var sourceMessages = preset === PRESET_FRANKENSTEIN
-                ? prepareFF5History(messages, dropAllInternalStates, frontend)
-                : messages;
+                ? prepareFF5History(historyMessages, dropAllInternalStates, frontend)
+                : historyMessages;
             processedMessages = buildOrderedMessagesFromPreset(
                 preset,
                 sourceMessages,
@@ -1795,9 +1874,9 @@ app.post([
         }
 
         if (wantsStream) {
-            handleStream(response.data, res, frontend, useFF5Display);
+            handleStream(response.data, res, frontend, useFF5Display, upstreamModel);
         } else {
-            handleNonStream(response.data, model || upstreamModel, res, frontend, useFF5Display);
+            handleNonStream(response.data, model || upstreamModel, res, frontend, useFF5Display, upstreamModel);
         }
     } catch (error) {
         console.error('Proxy error:', {
@@ -1813,7 +1892,7 @@ app.post([
     }
 });
 
-function handleStream(inputStream, res, frontend, useFF5Display) {
+function handleStream(inputStream, res, frontend, useFF5Display, model) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -1853,6 +1932,12 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
         var reasoning = extractReasoning(delta);
         var content = delta.content;
         if (reasoningFieldPresent) removeReasoningFields(delta);
+        if (reasoning && isKimiK3Model(model)) {
+            // Keep K3's native metadata available for clients that round-trip
+            // unknown OpenAI-compatible fields. Janitor still receives the
+            // same <think> display content below.
+            delta.reasoning_content = reasoning;
+        }
 
         if (reasoning) {
             // NIM providers currently use several names for the same channel
@@ -2076,9 +2161,10 @@ function handleStream(inputStream, res, frontend, useFF5Display) {
     });
 }
 
-function handleNonStream(data, model, res, frontend, useFF5Display) {
+function handleNonStream(data, model, res, frontend, useFF5Display, reasoningModel) {
     try {
         var exposeReasoning = shouldShowReasoning(frontend);
+        var providerReasoningModel = reasoningModel || model;
         var openaiResponse = {
             id: data.id || ('chatcmpl-' + Date.now()),
             object: 'chat.completion',
@@ -2111,6 +2197,9 @@ function handleNonStream(data, model, res, frontend, useFF5Display) {
                     content: fullContent
                 });
                 removeReasoningFields(outputMessage);
+                if (rawReasoning && isKimiK3Model(providerReasoningModel)) {
+                    outputMessage.reasoning_content = rawReasoning;
+                }
 
                 return {
                     index: choice.index !== undefined ? choice.index : index,
@@ -2179,6 +2268,8 @@ module.exports._test = {
     extractReasoning: extractReasoning,
     hasReasoningField: hasReasoningField,
     removeReasoningFields: removeReasoningFields,
+    splitLeadingReasoningFromContent: splitLeadingReasoningFromContent,
+    prepareKimiK3History: prepareKimiK3History,
     buildOpenRouterReasoningConfig: buildOpenRouterReasoningConfig,
     buildOpenRouterRequest: buildOpenRouterRequest,
     resolveOpenRouterModel: resolveOpenRouterModel,
