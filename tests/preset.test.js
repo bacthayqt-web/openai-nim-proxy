@@ -85,33 +85,6 @@ const janitorHistory = helpers.prepareFF5History([
 assert.strictEqual(janitorHistory[0].content, 'Old.', 'Janitor hidden state must be removed from history');
 assert.strictEqual(janitorHistory[2].content, 'Recent.', 'Janitor visible state must be removed from history');
 
-const reorderedJanitorHistory = helpers.prepareFF5History([
-    {
-        role: 'assistant',
-        content: '<think>\n### INTERNAL STATES\n\n#### WORLD SIM\nOld event\n</think>\n\nOld narrative.'
-    },
-    { role: 'user', content: 'Next.' },
-    {
-        role: 'assistant',
-        content: '<think>\nNative reasoning.\n\n### INTERNAL STATES\n\n#### WORLD SIM\nRecent event\n</think>\n\nRecent narrative.'
-    },
-    { role: 'user', content: 'Continue.' }
-], false, 'janitor');
-assert.strictEqual(
-    reorderedJanitorHistory[0].content,
-    'Old narrative.',
-    'Pruning an old leading state box must preserve its visible narrative'
-);
-assert(reorderedJanitorHistory[2].content.includes('<think>\nNative reasoning.\n</think>'));
-assert(reorderedJanitorHistory[2].content.includes('Recent narrative.'));
-assert(reorderedJanitorHistory[2].content.includes('<internal_states>'));
-assert(reorderedJanitorHistory[2].content.includes('Recent event'));
-assert(
-    reorderedJanitorHistory[2].content.indexOf('Recent narrative.') <
-        reorderedJanitorHistory[2].content.indexOf('<internal_states>'),
-    'The restored semantic state must follow the narrative in model context'
-);
-
 assert.strictEqual(helpers.detectFrontend({ path: '/janitor/v1/chat/completions' }), 'janitor');
 assert.strictEqual(helpers.detectFrontend({ path: '/v1/chat/completions' }), 'default');
 

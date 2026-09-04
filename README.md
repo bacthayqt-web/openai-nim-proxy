@@ -45,12 +45,8 @@ https://YOUR-PROXY/janitor/v1/chat/completions
 ```
 
 That route converts Pop-in Graphics and Internal States to portable Markdown.
-The response layer moves the final Internal States record into the message's
-leading `<think>` block, merging it with provider reasoning when present. This
-keeps one hidden/collapsible think box and leaves the visible narrative clean.
-For streamed Janitor replies, provider reasoning can still stream live, while
-the narrative is held until completion so the trailing state can be moved ahead
-of it reliably.
+The response layer places the final Internal States record inside a `<think>`
+block so it remains hidden/collapsible rather than leaking raw HTML.
 
 ## OpenRouter routes
 
@@ -122,8 +118,7 @@ every model like GLM:
 | --- | --- |
 | DeepSeek V4 | `thinking` plus `reasoning_effort` |
 | GLM | `enable_thinking` |
-| Kimi K3 | Top-level `reasoning_effort` |
-| Earlier Kimi models | `thinking` |
+| Kimi | `thinking` |
 | Qwen/QwQ | `enable_thinking` plus top-level `reasoning_effort` |
 | Nemotron | `enable_thinking` plus optional `reasoning_budget` |
 | Inkling | `reasoning_effort` (`none` when disabled) |
