@@ -55,7 +55,7 @@ var MODEL_MAPPING = {
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash-0731',
     'claude-3-opus': 'google/gemma-4-31b-it',
     'claude-3-sonnet': 'nvidia/nemotron-3-ultra-550b-a55b',
-    'gemini-pro': 'writer/palmyra-creative-122b'
+    'gemini-pro': 'minimaxai/minimax-m3'
 };
 
 function parseJsonObject(value, label) {
@@ -676,7 +676,20 @@ function prepareFF5History(messages, dropAllInternalStates, frontend) {
             return true;
         });
 
-        var cleanedContent = runRegexScripts(message.content, applicable);
+        // Regex 3.0's Hapuppy cleanup also removes literal <think> blocks.
+        // Recover a recent state record from that display wrapper before the
+        // cleanup runs, otherwise the state would disappear from continuity
+        // along with the provider's private reasoning. This only rewrites the
+        // stored history; it does not buffer or delay the live response.
+        var historyContent = message.content;
+        if (!dropAllInternalStates && depth < 2) {
+            historyContent = frontend === 'janitor'
+                ? restoreJanitorStateForContext(historyContent)
+                : restoreGenericStateForContext(historyContent);
+        }
+
+        var cleanedContent = runRegexScripts(historyContent, applicable)
+            .replace(/^[\r\n]+/, '');
 
         // Retain only the newest state record for continuity. Crucially, the
         // retained record is normalized for the frontend that is making THIS

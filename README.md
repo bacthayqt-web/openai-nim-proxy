@@ -1,13 +1,13 @@
 # OpenAI-compatible NVIDIA NIM and OpenRouter proxy
 
 This proxy routes OpenAI-style chat completion requests to NVIDIA NIM or
-OpenRouter and injects the same Frankenstein 5.2 roleplay preset before either
+OpenRouter and injects the same Frankenstein 5.4 roleplay preset before either
 provider receives the conversation.
 
-## Frankenstein 5.2 profile
+## Frankenstein 5.4 profile
 
-`presets/frankenstein.json` is compiled from **FF5.2 Internal States Forced
-Reasoning hapuppy** and uses **FF5 Regex Suite 2.4** with these choices on
+`presets/frankenstein.json` is compiled from **Freaky Frankenstein 5.4
+Internal States** and uses **FF5 Regex 3.0 Suite** with these choices on
 Chub and other generic frontends:
 
 - Cinematic Realism
@@ -15,9 +15,11 @@ Chub and other generic frontends:
 - Realism Mode
 - Anti-Echo
 - BOLT reasoning
-- Micro NPC Voice
-- Default Internal States: DnD Simulator, GM's Notebook, Relationships,
-  Chekhov's Gun, and Internal Thoughts
+- Micro NPC Voice 2.0
+- Pop-in Graphics, Spectacle Combat, Onomatopoeia, and HQ NPC Genesis
+- All eight Internal States modules: DnD Simulator, Internal Agenda, GM's
+  Notebook, Inventory/Feats/Titles, Relationships, World Sim, Chekhov's Gun,
+  and Internal Thoughts
 
 The proxy expands FF5's SillyTavern `setvar`, `getvar`, `trim`, and `roll::1d20`
 macros before sending the request upstream. On generic frontends, older
@@ -34,7 +36,7 @@ https://YOUR-PROXY/v1/chat/completions
 ```
 
 The generic route preserves FF5's inline-HTML Pop-in Graphics and Internal
-States presentation and applies the included FF5 display regex. If a model
+States presentation and applies the included Regex 3.0 display suite. If a model
 returns a Markdown or hidden-comment state variant, the proxy converts it into
 one visible collapsible fallback panel so state display remains deterministic.
 
@@ -50,6 +52,8 @@ the model's private reasoning, before the visible narrative. The normal
 reasoning stream therefore places it inside the leading `<think>` box without
 buffering or delaying the visible response. Use `SHOW_REASONING=true` on this
 route so the think box and its state record remain in conversation history.
+Regex 3.0's thought cleanup is applied only after the newest state has been
+recovered for model context, so it cannot discard state stored inside that box.
 
 ## OpenRouter routes
 

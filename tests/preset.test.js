@@ -6,6 +6,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const preset = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'frankenstein.json'), 'utf8'));
+const regexSuite = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'ff5-regex.json'), 'utf8'));
 const janitorOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.janitor.json'), 'utf8'));
 const janitorStateOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.janitor-state.json'), 'utf8'));
 const janitorJailbreakOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.janitor-jailbreak.json'), 'utf8'));
@@ -35,12 +36,20 @@ assert(ids.includes(boltId), 'BOLT reasoning must be active');
 assert(!ids.includes(maxId), 'MAX reasoning must be inactive');
 assert(!ids.includes(coloredDialogueId), 'Colored Dialogue must be inactive');
 assert.strictEqual(preset.profile.nsfw_mode, 'realism');
+assert.strictEqual(preset.profile.preset_version, '5.4');
+assert.strictEqual(preset.profile.regex_suite, '3.0');
 assert.strictEqual(preset.profile.reasoning, 'bolt');
 assert.strictEqual(preset.profile.pov, 'third_person');
 assert.strictEqual(preset.profile.colored_dialogue, false);
+assert.strictEqual(preset.profile.npc_voice, 'micro_2.0');
 assert.strictEqual(preset.profile.internal_states.length, 8);
 assert.strictEqual(new Set(ids).size, ids.length, 'Prompt order must not contain duplicates');
 assert.strictEqual(ids.length, preset.prompts.length, 'Every compiled prompt must be ordered exactly once');
+
+const dndPrompt = preset.prompts.find((prompt) => prompt.identifier === '019f62e8-892f-7021-97a6-42e1b83eaad3');
+assert(dndPrompt, 'FF5.4 DnD prompt must be present');
+assert.strictEqual((dndPrompt.content.match(/<internal_dndsim>/g) || []).length, 1, 'DnD wrapper must open once');
+assert.strictEqual((dndPrompt.content.match(/<\/internal_dndsim>/g) || []).length, 1, 'DnD wrapper must close once');
 
 const genericBuilt = helpers.buildOrderedMessagesFromPreset(
     preset,
@@ -71,7 +80,8 @@ assert(!janitorSystem.content.includes('worldsimRoll:'));
 assert(!janitorSystem.content.includes('Append this entire block as raw HTML'));
 assert(janitorSystem.content.includes('Internal States are disabled on this frontend'));
 assert(!janitorSystem.content.includes('Ensure internal states created correctly'));
-assert(!/<colored_dialogue>|<font\s+color=/i.test(janitorSystem.content));
+assert(!/<colored_dialogue>/i.test(janitorSystem.content));
+assert(!/<font\s+color=/i.test(janitorSystem.content));
 assert(!/\{\{(?:setvar|getvar|roll)::/.test(janitorSystem.content), 'FF5 macros must be expanded server-side');
 
 const janitorStateBuilt = helpers.buildOrderedMessagesFromPreset(
@@ -83,6 +93,9 @@ const janitorStateBuilt = helpers.buildOrderedMessagesFromPreset(
 const janitorStateSystem = janitorStateBuilt.find((message) => message.role === 'system');
 assert(janitorStateSystem.content.includes('final part of private reasoning'));
 assert(janitorStateSystem.content.includes('Never append Internal States after the narrative'));
+assert(janitorStateSystem.content.includes('DND SIM — Dice=law'));
+assert(janitorStateSystem.content.includes('#### PHYSICS, ENGINE & WORLD'));
+assert(!janitorStateSystem.content.includes('<details>'));
 assert(!janitorStateSystem.content.includes('<!-- FF5_INTERNAL_STATE'));
 assert(!janitorStateSystem.content.includes('created correctly at end of every response'));
 
@@ -122,7 +135,8 @@ assert.strictEqual(
     'Old narrative.',
     'Pruning an old leading state box must preserve its visible narrative'
 );
-assert(reorderedJanitorHistory[2].content.includes('<think>\nNative reasoning.\n</think>'));
+assert(!reorderedJanitorHistory[2].content.includes('Native reasoning.'));
+assert(!reorderedJanitorHistory[2].content.includes('<think>'));
 assert(reorderedJanitorHistory[2].content.includes('Recent narrative.'));
 assert(reorderedJanitorHistory[2].content.includes('<internal_states>'));
 assert(reorderedJanitorHistory[2].content.includes('Recent event'));
@@ -134,5 +148,19 @@ assert(
 
 assert.strictEqual(helpers.detectFrontend({ path: '/janitor/v1/chat/completions' }), 'janitor');
 assert.strictEqual(helpers.detectFrontend({ path: '/v1/chat/completions' }), 'default');
+
+assert.strictEqual(regexSuite.length, 25, 'The complete Regex 3.0 suite must be installed');
+assert(regexSuite.some((script) => script.scriptName === 'FF5 Delete - Untagged Thoughts'));
+assert(regexSuite.some((script) => script.scriptName === 'FF5 Repair - GFX Unfence'));
+assert(regexSuite.some((script) => script.scriptName === 'FF5 - Universal Dialogue Colorizer'));
+assert(regexSuite.some((script) => script.scriptName === 'FF5 - Context Saver (Universal)'));
+regexSuite.forEach((script) => {
+    const lastSlash = script.findRegex.lastIndexOf('/');
+    assert(lastSlash > 0, `${script.scriptName} must contain a regex literal`);
+    assert.doesNotThrow(
+        () => new RegExp(script.findRegex.slice(1, lastSlash), script.findRegex.slice(lastSlash + 1)),
+        `${script.scriptName} must compile in Node.js`
+    );
+});
 
 console.log('preset.test.js: all assertions passed');
