@@ -33,10 +33,9 @@ assert.deepStrictEqual(
     config('z-ai/glm-5.2', {}, true).chat_template_kwargs,
     { enable_thinking: true }
 );
-assert.deepStrictEqual(
-    config('moonshotai/kimi-k3', {}, true).chat_template_kwargs,
-    { thinking: true }
-);
+const kimiK3 = config('moonshotai/kimi-k3', {}, true);
+assert.strictEqual(kimiK3.chat_template_kwargs, undefined);
+assert.deepStrictEqual(kimiK3.top_level, { reasoning_effort: 'high' });
 
 const qwen = config('qwen/qwen3.8', {}, true, 'medium');
 assert.deepStrictEqual(qwen.chat_template_kwargs, { enable_thinking: true });
@@ -100,6 +99,29 @@ assert.strictEqual(
     '<think>\nPrivate analysis.\n</think>\n\nFinal answer.'
 );
 
+let janitorStateJson = null;
+helpers.handleNonStream({
+    choices: [{
+        index: 0,
+        message: {
+            role: 'assistant',
+            reasoning: 'Private analysis.',
+            content: 'Final answer.\n\n### INTERNAL STATES\n[WORLD SIM]\nEvent'
+        },
+        finish_reason: 'stop'
+    }]
+}, 'gpt-4-0613', {
+    json(value) { janitorStateJson = value; },
+    status() { return this; }
+}, 'janitor', true);
+const mergedStateContent = janitorStateJson.choices[0].message.content;
+const mergedStateClose = mergedStateContent.indexOf('</think>');
+assert.strictEqual((mergedStateContent.match(/<think>/g) || []).length, 1);
+assert.strictEqual(mergedStateContent.indexOf('<think>'), 0);
+assert(mergedStateContent.indexOf('Private analysis.') < mergedStateClose);
+assert(mergedStateContent.indexOf('### INTERNAL STATES') < mergedStateClose);
+assert(mergedStateContent.indexOf('Final answer.') > mergedStateClose);
+
 let genericJson = null;
 helpers.handleNonStream({
     choices: [{
@@ -139,7 +161,47 @@ async function testStreamedReasoningAlias() {
     assert(!wire.includes('"reasoning"'));
 }
 
-testStreamedReasoningAlias().then(function() {
+async function testStreamedReasoningWithState() {
+    const input = new PassThrough();
+    const writes = [];
+    let resolveEnd;
+    const ended = new Promise((resolve) => { resolveEnd = resolve; });
+    const res = {
+        headersSent: false,
+        setHeader() {},
+        write(chunk) { writes.push(String(chunk)); },
+        end() { resolveEnd(); }
+    };
+
+    helpers.handleStream(input, res, 'janitor', true);
+    input.end(
+        'data: ' + JSON.stringify({ choices: [{ delta: { reasoning: 'Stream trace.' } }] }) + '\n\n' +
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: 'Stream answer.' } }] }) + '\n\n' +
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: '\n\n### INTERNAL STATES\n[WORLD SIM]\nEvent' } }] }) + '\n\n' +
+        'data: [DONE]\n\n'
+    );
+    await ended;
+
+    let content = '';
+    writes.join('').split(/\n\n/).forEach(function(event) {
+        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
+        const parsed = JSON.parse(event.slice(6));
+        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
+        if (delta && typeof delta.content === 'string') content += delta.content;
+    });
+
+    const closeAt = content.indexOf('</think>');
+    assert.strictEqual(content.indexOf('<think>'), 0);
+    assert.strictEqual((content.match(/<think>/g) || []).length, 1);
+    assert(content.indexOf('Stream trace.') < closeAt);
+    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert(content.indexOf('Stream answer.') > closeAt);
+}
+
+Promise.all([
+    testStreamedReasoningAlias(),
+    testStreamedReasoningWithState()
+]).then(function() {
     console.log('thinking.test.js: all assertions passed');
 }).catch(function(error) {
     console.error(error.stack || error);
