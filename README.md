@@ -6,9 +6,8 @@ provider receives the conversation.
 
 ## Frankenstein 5.4 profile
 
-`presets/frankenstein.json` is compiled from **Freaky Frankenstein 5.4
-Internal States** and uses **FF5 Regex 3.0 Suite** with these choices on
-Chub and other generic frontends:
+`presets/frankenstein.json` is compiled from **Freaky Frankenstein 5.4** and
+uses **FF5 Regex 3.0 Suite** with these choices on every frontend:
 
 - Cinematic Realism
 - Third-person POV (replaces FF5's default Hybrid POV)
@@ -17,15 +16,13 @@ Chub and other generic frontends:
 - Single-pass BOLT reasoning with an anti-drafting completion gate
 - Micro NPC Voice 2.0
 - Pop-in Graphics, Spectacle Combat, Onomatopoeia, and HQ NPC Genesis
-- All eight Internal States modules: DnD Simulator, Internal Agenda, GM's
-  Notebook, Inventory/Feats/Titles, Relationships, World Sim, Chekhov's Gun,
-  and Internal Thoughts
+- Internal States disabled
 
 The proxy expands FF5's SillyTavern `setvar`, `getvar`, `trim`, and `roll::1d20`
-macros before sending the request upstream. On generic frontends, older
-Internal State blocks are removed from model context after two turns while the
-newest block is retained. Every exposed model routes through this Frankenstein
-profile; legacy preset overrides are ignored.
+macros before sending the request upstream. Every exposed model routes through
+this Frankenstein profile; legacy preset overrides are ignored. All Internal
+States modules are excluded before prompt compilation, and old state records
+are removed from incoming history instead of being sent back to the model.
 
 ## Frontend URLs
 
@@ -35,10 +32,10 @@ Use the normal route for Chub AI and other generic OpenAI-compatible clients:
 https://YOUR-PROXY/v1/chat/completions
 ```
 
-The generic route preserves FF5's inline-HTML Pop-in Graphics and Internal
-States presentation and applies the included Regex 3.0 display suite. If a model
-returns a Markdown or hidden-comment state variant, the proxy converts it into
-one visible collapsible fallback panel so state display remains deterministic.
+The generic route preserves FF5's inline-HTML Pop-in Graphics and applies the
+included Regex 3.0 display suite. Internal States are never displayed. Markdown,
+HTML, XML, and hidden-comment state variants from old history or a disobedient
+model are stripped before output.
 
 Use the Janitor-specific route in Janitor AI:
 
@@ -46,23 +43,10 @@ Use the Janitor-specific route in Janitor AI:
 https://YOUR-PROXY/janitor/v1/chat/completions
 ```
 
-That route converts Pop-in Graphics and Internal States to portable Markdown.
-The Janitor override generates the final Internal States record at the end of
-the model's private reasoning, before the visible narrative. The normal
-reasoning stream therefore places it inside the leading `<think>` box without
-buffering or delaying the visible response. Use `SHOW_REASONING=true` on this
-route so the think box and its state record remain in conversation history.
-Regex 3.0's thought cleanup is applied only after the newest state has been
-recovered for model context, so it cannot discard state stored inside that box.
-
-If a model disobeys the channel instruction and emits `### INTERNAL STATES`
-immediately after `</think>`, the Janitor response layer keeps the think box
-open, recognizes the following FF5 clock header as the start of narrative,
-moves the state record before `</think>`, and removes the visible duplicate.
-It also suppresses the relocated copy when the provider's native reasoning
-channel already contains a complete state record. In this fallback case the
-reasoning continues streaming normally, while visible narrative is released
-after the state boundary has been verified.
+That route converts Pop-in Graphics to portable Markdown. `SHOW_REASONING=true`
+still exposes the model's ordinary BOLT checklist in one leading `<think>` box,
+but Internal States are removed from both reasoning and visible content. Old
+state records are also pruned from the history supplied to the next model call.
 
 ## OpenRouter routes
 
@@ -150,11 +134,10 @@ asks the model to stop early.
 
 The active BOLT prompt runs Tasks 0-10 as one concise pass. Each task produces
 one decision note instead of examples, alternative scene paths, repeated rule
-lists, or draft dialogue. A final completion gate tells the model to abandon
-any wording that begins to resemble visible prose, finish the remaining task
-labels concisely, write Internal States once in the frontend-specific location,
-and move directly to the final response. This changes prompt behavior only; it
-does not buffer, rewrite, or truncate streamed reasoning.
+lists, or draft dialogue. Task 10 performs a final visible-history consistency
+check and moves directly to the response. The completion gate explicitly bans
+Internal States, trackers, relationship tables, DnD logs, and substitute state
+blocks on every frontend.
 Recognized per-request options in root `chat_template_kwargs`, SDK-style
 `extra_body.chat_template_kwargs`, and top-level `reasoning_effort` or
 `reasoning_budget` are normalized automatically.

@@ -76,9 +76,12 @@ assert.deepStrictEqual(
 
 const root = path.join(__dirname, '..');
 const preset = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'frankenstein.json'), 'utf8'));
+const noStateOverrides = JSON.parse(fs.readFileSync(path.join(root, 'presets', 'overrides.no-internal-states.json'), 'utf8'));
 const compiled = helpers.buildOrderedMessagesFromPreset(
     preset,
-    [{ role: 'user', content: 'Begin.' }]
+    [{ role: 'user', content: 'Begin.' }],
+    noStateOverrides,
+    helpers.internalStatePromptIds
 );
 const request = helpers.buildOpenRouterRequest({
     model: 'gpt-4',
@@ -107,6 +110,7 @@ assert.strictEqual(request.extra_body, undefined);
 assert.strictEqual(request.preset_override, undefined);
 assert.strictEqual(request.chat_template_kwargs, undefined);
 assert(request.messages[0].content.includes('<system_state>'));
-assert(request.messages[0].content.includes('<internal_states>'));
+assert(request.messages[0].content.includes('INTERNAL STATES ARE DISABLED ON EVERY FRONTEND'));
+assert(!request.messages[0].content.includes('<internal_states_module>'));
 
 console.log('openrouter.test.js: all assertions passed');

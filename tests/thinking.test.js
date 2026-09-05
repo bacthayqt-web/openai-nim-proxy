@@ -35,6 +35,17 @@ const misplacedStateThenNarrative = [
     '"You got tall."'
 ].join('\n');
 
+function parseStreamContent(writes) {
+    let content = '';
+    writes.join('').split(/\n\n/).forEach(function(event) {
+        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
+        const parsed = JSON.parse(event.slice(6));
+        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
+        if (delta && typeof delta.content === 'string') content += delta.content;
+    });
+    return content;
+}
+
 assert.deepStrictEqual(
     config('deepseek-ai/deepseek-v4-flash-0731', {}, true).chat_template_kwargs,
     { thinking: true, reasoning_effort: 'high' }
@@ -138,7 +149,8 @@ const mergedStateClose = mergedStateContent.indexOf('</think>');
 assert.strictEqual((mergedStateContent.match(/<think>/g) || []).length, 1);
 assert.strictEqual(mergedStateContent.indexOf('<think>'), 0);
 assert(mergedStateContent.indexOf('Private analysis.') < mergedStateClose);
-assert(mergedStateContent.indexOf('### INTERNAL STATES') < mergedStateClose);
+assert(!mergedStateContent.includes('### INTERNAL STATES'));
+assert(!mergedStateContent.includes('[WORLD SIM]'));
 assert(mergedStateContent.indexOf('Final answer.') > mergedStateClose);
 
 let relocatedStateJson = null;
@@ -157,8 +169,7 @@ helpers.handleNonStream({
 }, 'janitor', true);
 const relocatedStateContent = relocatedStateJson.choices[0].message.content;
 const relocatedStateClose = relocatedStateContent.indexOf('</think>');
-assert.strictEqual((relocatedStateContent.match(/### INTERNAL STATES/g) || []).length, 1);
-assert(relocatedStateContent.indexOf('### INTERNAL STATES') < relocatedStateClose);
+assert.strictEqual((relocatedStateContent.match(/### INTERNAL STATES/g) || []).length, 0);
 assert(relocatedStateContent.indexOf('[ 🕰️ 10:19 AM') > relocatedStateClose);
 assert(relocatedStateContent.indexOf('*Jane sets down her mug.*') > relocatedStateClose);
 
@@ -178,7 +189,7 @@ helpers.handleNonStream({
     status() { return this; }
 }, 'janitor', true);
 const deduplicatedStateContent = deduplicatedStateJson.choices[0].message.content;
-assert.strictEqual((deduplicatedStateContent.match(/### INTERNAL STATES/g) || []).length, 1);
+assert.strictEqual((deduplicatedStateContent.match(/### INTERNAL STATES/g) || []).length, 0);
 assert(deduplicatedStateContent.indexOf('[ 🕰️ 10:19 AM') > deduplicatedStateContent.indexOf('</think>'));
 
 let genericJson = null;
@@ -215,8 +226,9 @@ async function testStreamedReasoningAlias() {
     await ended;
 
     const wire = writes.join('');
-    assert(wire.includes('<think>\\nStream trace.'));
-    assert(wire.includes('</think>\\n\\nStream answer.'));
+    const content = parseStreamContent(writes);
+    assert(content.includes('<think>\nStream trace.'));
+    assert(content.includes('</think>\n\nStream answer.'));
     assert(!wire.includes('"reasoning"'));
 }
 
@@ -254,19 +266,14 @@ async function testStreamedReasoningWithState() {
     );
     await ended;
 
-    let content = '';
-    writes.join('').split(/\n\n/).forEach(function(event) {
-        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
-        const parsed = JSON.parse(event.slice(6));
-        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
-        if (delta && typeof delta.content === 'string') content += delta.content;
-    });
+    const content = parseStreamContent(writes);
 
     const closeAt = content.indexOf('</think>');
     assert.strictEqual(content.indexOf('<think>'), 0);
     assert.strictEqual((content.match(/<think>/g) || []).length, 1);
     assert(content.indexOf('Stream trace.') < closeAt);
-    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert(!content.includes('### INTERNAL STATES'));
+    assert(!content.includes('[WORLD SIM]'));
     assert(content.indexOf('Stream answer.') > closeAt);
 }
 
@@ -300,17 +307,10 @@ async function testStreamedReasoningRelocatesVisibleStatePrefix() {
     );
     await ended;
 
-    let content = '';
-    writes.join('').split(/\n\n/).forEach(function(event) {
-        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
-        const parsed = JSON.parse(event.slice(6));
-        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
-        if (delta && typeof delta.content === 'string') content += delta.content;
-    });
+    const content = parseStreamContent(writes);
 
     const closeAt = content.indexOf('</think>');
-    assert.strictEqual((content.match(/### INTERNAL STATES/g) || []).length, 1);
-    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert.strictEqual((content.match(/### INTERNAL STATES/g) || []).length, 0);
     assert(content.indexOf('[ 🕰️ 10:19 AM') > closeAt);
     assert(content.indexOf('*Jane sets down her mug.*') > closeAt);
 }
@@ -339,10 +339,7 @@ async function testLiteralLeadingStateThinkStreams() {
         }) + '\n\n'
     );
     await new Promise((resolve) => setImmediate(resolve));
-    assert(
-        writes.join('').includes('<think>\\n### INTERNAL STATES'),
-        'A literal leading think block must stream before completion'
-    );
+    assert(!writes.join('').includes('INTERNAL STATES'), 'A literal state block must not stream');
 
     input.end(
         'data: ' + JSON.stringify({
@@ -352,17 +349,12 @@ async function testLiteralLeadingStateThinkStreams() {
     );
     await ended;
 
-    let content = '';
-    writes.join('').split(/\n\n/).forEach(function(event) {
-        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
-        const parsed = JSON.parse(event.slice(6));
-        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
-        if (delta && typeof delta.content === 'string') content += delta.content;
-    });
+    const content = parseStreamContent(writes);
 
     const closeAt = content.indexOf('</think>');
     assert.strictEqual(content.indexOf('<think>'), 0);
-    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert(!content.includes('### INTERNAL STATES'));
+    assert(!content.includes('[WORLD SIM]'));
     assert(content.indexOf('Literal answer.') > closeAt);
 }
 
@@ -386,7 +378,6 @@ async function testLiteralThinkRelocatesPostThinkState() {
     );
     await new Promise((resolve) => setImmediate(resolve));
     assert(writes.join('').includes('<think>0. Audit.'));
-    assert(!writes.join('').includes('</think>'), 'The close tag must wait for state-prefix inspection');
 
     input.end(
         'data: ' + JSON.stringify({
@@ -396,17 +387,10 @@ async function testLiteralThinkRelocatesPostThinkState() {
     );
     await ended;
 
-    let content = '';
-    writes.join('').split(/\n\n/).forEach(function(event) {
-        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
-        const parsed = JSON.parse(event.slice(6));
-        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
-        if (delta && typeof delta.content === 'string') content += delta.content;
-    });
+    const content = parseStreamContent(writes);
 
     const closeAt = content.indexOf('</think>');
-    assert.strictEqual((content.match(/### INTERNAL STATES/g) || []).length, 1);
-    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert.strictEqual((content.match(/### INTERNAL STATES/g) || []).length, 0);
     assert(content.indexOf('[ 🕰️ 10:19 AM') > closeAt);
     assert(content.indexOf('*Jane sets down her mug.*') > closeAt);
 }

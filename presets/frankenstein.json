@@ -1,6 +1,6 @@
 {
   "name": "Frankenstein 5.4 BOLT Realism - Universal (Third Person)",
-  "description": "FF5.4 Internal States profile with Cinematic Realism, third-person POV, Realism Mode, Anti-Echo, single-pass anti-drafting BOLT reasoning, Micro NPC Voice 2.0, Onomatopoeia, Pop-in Graphics, Spectacle Combat, HQ NPC Genesis, Post-History Instructions, and all eight Internal States modules. Colored Dialogue is disabled.",
+  "description": "FF5.4 profile with Cinematic Realism, third-person POV, Realism Mode, Anti-Echo, single-pass anti-drafting BOLT reasoning, Micro NPC Voice 2.0, Onomatopoeia, Pop-in Graphics, Spectacle Combat, HQ NPC Genesis, and Post-History Instructions. Internal States and Colored Dialogue are disabled.",
   "profile": {
     "preset_version": "5.4",
     "regex_suite": "3.0",
@@ -18,20 +18,11 @@
     "spectacle_combat": true,
     "hq_npc_genesis": true,
     "frontend_rendering": {
-      "default": "ff5_html",
-      "janitor": "markdown_with_think_state"
+      "default": "ff5_html_no_state",
+      "janitor": "markdown_no_state"
     },
-    "internal_states": [
-      "dnd_simulator",
-      "internal_agenda",
-      "gm_notebook",
-      "inventory_feats_titles",
-      "relationships",
-      "world_sim",
-      "chekhovs_gun",
-      "internal_thoughts"
-    ],
-    "continuity": "ff5_recent_state"
+    "internal_states": [],
+    "continuity": "visible_history_only"
   },
   "source": "Freaky Frankenstein 5.4 Internal States (standard preset)",
   "prompts": [
