@@ -39,32 +39,12 @@ assert.strictEqual(preset.profile.nsfw_mode, 'realism');
 assert.strictEqual(preset.profile.preset_version, '5.4');
 assert.strictEqual(preset.profile.regex_suite, '3.0');
 assert.strictEqual(preset.profile.reasoning, 'bolt');
-assert.deepStrictEqual(preset.profile.reasoning_anti_drafting, {
-    enabled: true,
-    mode: 'decision_notes_only',
-    pre_state_word_budget: 220
-});
 assert.strictEqual(preset.profile.pov, 'third_person');
 assert.strictEqual(preset.profile.colored_dialogue, false);
 assert.strictEqual(preset.profile.npc_voice, 'micro_2.0');
 assert.strictEqual(preset.profile.internal_states.length, 8);
 assert.strictEqual(new Set(ids).size, ids.length, 'Prompt order must not contain duplicates');
 assert.strictEqual(ids.length, preset.prompts.length, 'Every compiled prompt must be ordered exactly once');
-
-const autonomyPrompt = preset.prompts.find((prompt) => prompt.identifier === '019f62e8-892f-700f-93e0-640159f4d52a');
-assert(autonomyPrompt, 'User-autonomy prompt must be present');
-assert(!autonomyPrompt.content.includes('<anti_drafting>'), 'Anti-drafting must not be misapplied as a visible-scene pacing rule');
-
-const boltPrompt = preset.prompts.find((prompt) => prompt.identifier === boltId);
-assert(boltPrompt, 'BOLT reasoning prompt must be present');
-assert(boltPrompt.content.includes('<reasoning_anti_drafting>'));
-assert(boltPrompt.content.includes('at most 220 words and at most 12 terse bullet lines'));
-assert(boltPrompt.content.includes('Never write sample dialogue, narration'));
-assert(boltPrompt.content.includes('Select exactly one immediate NPC/world beat'));
-assert(boltPrompt.content.includes('produce the final response exactly once'));
-assert(!boltPrompt.content.includes('Write a brief action example'));
-assert(!boltPrompt.content.includes('write dialogue examples'));
-assert(!boltPrompt.content.includes('Brainstorm 3'));
 
 const dndPrompt = preset.prompts.find((prompt) => prompt.identifier === '019f62e8-892f-7021-97a6-42e1b83eaad3');
 assert(dndPrompt, 'FF5.4 DnD prompt must be present');

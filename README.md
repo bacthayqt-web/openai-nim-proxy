@@ -14,7 +14,7 @@ Chub and other generic frontends:
 - Third-person POV (replaces FF5's default Hybrid POV)
 - Realism Mode
 - Anti-Echo
-- BOLT reasoning with a strict anti-drafting guard
+- BOLT reasoning
 - Micro NPC Voice 2.0
 - Pop-in Graphics, Spectacle Combat, Onomatopoeia, and HQ NPC Genesis
 - All eight Internal States modules: DnD Simulator, Internal Agenda, GM's
@@ -26,13 +26,6 @@ macros before sending the request upstream. On generic frontends, older
 Internal State blocks are removed from model context after two turns while the
 newest block is retained. Every exposed model routes through this Frankenstein
 profile; legacy preset overrides are ignored.
-
-The BOLT anti-drafting guard applies to private reasoning, not to the visible
-scene. Before Internal States are generated, reasoning is limited to compact
-decision notes (up to 220 words or 12 bullet lines), one selected next beat,
-and turn-specific checks. It forbids sample narration, sample dialogue,
-alternate scene drafts, prompt restatement, and prewriting the final response.
-The normal 400–600-word visible response target is unchanged.
 
 ## Frontend URLs
 
@@ -151,16 +144,6 @@ Reasoning responses are normalized from `reasoning_content`, `reasoning`,
 `<think>` block. Generic clients continue to receive only the final answer,
 including when a provider emits literal `<think>`, `<thinking>`, `<reasoning>`,
 or `<analysis>` tags.
-
-Kimi K3 is handled specially for multi-turn history. If a frontend returns the
-previous Janitor `<think>` display only as ordinary message content, the proxy
-reconstructs that leading block into `assistant.reasoning_content` before
-sending history back to NIM. If a client already preserves native
-`reasoning_content`, that provider-native value is retained. K3 reasoning
-metadata is also preserved on proxy responses for clients that can round-trip
-unknown OpenAI-compatible fields. When `REASONING_EFFORT` is not explicitly
-configured, K3 keeps its native `max` reasoning-effort default instead of the
-proxy's generic `high` fallback.
 
 On OpenRouter routes, a caller-supplied `reasoning` object is preserved. When
 the request does not supply one, an explicitly configured
