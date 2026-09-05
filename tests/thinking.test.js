@@ -16,6 +16,25 @@ function config(model, body, enabled, effort, budget) {
     });
 }
 
+const misplacedStateThenNarrative = [
+    '### INTERNAL STATES',
+    '',
+    '**TURN:** 2',
+    '',
+    '#### WORLD SIM',
+    '- Event: rumor spreads',
+    '',
+    '#### PHYSICS, ENGINE & WORLD',
+    '- **Environment:** Quiet pharmacy',
+    '- **Physics:** Jane and Antoine are one meter apart',
+    '',
+    '[ 🕰️ 10:19 AM | 🗓️ Day 1 | 📍 Pharmacy | ☀️ Clear ]',
+    '',
+    '*Jane sets down her mug.*',
+    '',
+    '"You got tall."'
+].join('\n');
+
 assert.deepStrictEqual(
     config('deepseek-ai/deepseek-v4-flash-0731', {}, true).chat_template_kwargs,
     { thinking: true, reasoning_effort: 'high' }
@@ -122,6 +141,46 @@ assert(mergedStateContent.indexOf('Private analysis.') < mergedStateClose);
 assert(mergedStateContent.indexOf('### INTERNAL STATES') < mergedStateClose);
 assert(mergedStateContent.indexOf('Final answer.') > mergedStateClose);
 
+let relocatedStateJson = null;
+helpers.handleNonStream({
+    choices: [{
+        index: 0,
+        message: {
+            role: 'assistant',
+            content: '<think>0. Audit.\n\nInternal states then narrative.\n</think>\n\n' + misplacedStateThenNarrative
+        },
+        finish_reason: 'stop'
+    }]
+}, 'gpt-4-0613', {
+    json(value) { relocatedStateJson = value; },
+    status() { return this; }
+}, 'janitor', true);
+const relocatedStateContent = relocatedStateJson.choices[0].message.content;
+const relocatedStateClose = relocatedStateContent.indexOf('</think>');
+assert.strictEqual((relocatedStateContent.match(/### INTERNAL STATES/g) || []).length, 1);
+assert(relocatedStateContent.indexOf('### INTERNAL STATES') < relocatedStateClose);
+assert(relocatedStateContent.indexOf('[ 🕰️ 10:19 AM') > relocatedStateClose);
+assert(relocatedStateContent.indexOf('*Jane sets down her mug.*') > relocatedStateClose);
+
+let deduplicatedStateJson = null;
+helpers.handleNonStream({
+    choices: [{
+        index: 0,
+        message: {
+            role: 'assistant',
+            reasoning: 'Audit.\n\n### INTERNAL STATES\n\n**TURN:** 2\n\n#### WORLD SIM\n- Event: rumor spreads',
+            content: misplacedStateThenNarrative
+        },
+        finish_reason: 'stop'
+    }]
+}, 'gpt-4-0613', {
+    json(value) { deduplicatedStateJson = value; },
+    status() { return this; }
+}, 'janitor', true);
+const deduplicatedStateContent = deduplicatedStateJson.choices[0].message.content;
+assert.strictEqual((deduplicatedStateContent.match(/### INTERNAL STATES/g) || []).length, 1);
+assert(deduplicatedStateContent.indexOf('[ 🕰️ 10:19 AM') > deduplicatedStateContent.indexOf('</think>'));
+
 let genericJson = null;
 helpers.handleNonStream({
     choices: [{
@@ -211,6 +270,51 @@ async function testStreamedReasoningWithState() {
     assert(content.indexOf('Stream answer.') > closeAt);
 }
 
+async function testStreamedReasoningRelocatesVisibleStatePrefix() {
+    const input = new PassThrough();
+    const writes = [];
+    let resolveEnd;
+    const ended = new Promise((resolve) => { resolveEnd = resolve; });
+    const res = {
+        headersSent: false,
+        setHeader() {},
+        write(chunk) { writes.push(String(chunk)); },
+        end() { resolveEnd(); }
+    };
+
+    helpers.handleStream(input, res, 'janitor', true);
+    input.write(
+        'data: ' + JSON.stringify({
+            choices: [{ delta: { reasoning: '0. Audit.\n\nInternal states then narrative.' } }]
+        }) + '\n\n'
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert(writes.join('').includes('<think>\\n0. Audit.'));
+
+    const splitAt = misplacedStateThenNarrative.indexOf('#### PHYSICS');
+    input.end(
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: misplacedStateThenNarrative.slice(0, 13) } }] }) + '\n\n' +
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: misplacedStateThenNarrative.slice(13, splitAt) } }] }) + '\n\n' +
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: misplacedStateThenNarrative.slice(splitAt) } }] }) + '\n\n' +
+        'data: [DONE]\n\n'
+    );
+    await ended;
+
+    let content = '';
+    writes.join('').split(/\n\n/).forEach(function(event) {
+        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
+        const parsed = JSON.parse(event.slice(6));
+        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
+        if (delta && typeof delta.content === 'string') content += delta.content;
+    });
+
+    const closeAt = content.indexOf('</think>');
+    assert.strictEqual((content.match(/### INTERNAL STATES/g) || []).length, 1);
+    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert(content.indexOf('[ 🕰️ 10:19 AM') > closeAt);
+    assert(content.indexOf('*Jane sets down her mug.*') > closeAt);
+}
+
 async function testLiteralLeadingStateThinkStreams() {
     const input = new PassThrough();
     const writes = [];
@@ -262,10 +366,57 @@ async function testLiteralLeadingStateThinkStreams() {
     assert(content.indexOf('Literal answer.') > closeAt);
 }
 
+async function testLiteralThinkRelocatesPostThinkState() {
+    const input = new PassThrough();
+    const writes = [];
+    let resolveEnd;
+    const ended = new Promise((resolve) => { resolveEnd = resolve; });
+    const res = {
+        headersSent: false,
+        setHeader() {},
+        write(chunk) { writes.push(String(chunk)); },
+        end() { resolveEnd(); }
+    };
+
+    helpers.handleStream(input, res, 'janitor', true);
+    input.write(
+        'data: ' + JSON.stringify({
+            choices: [{ delta: { content: '<think>0. Audit.\n\nInternal states then narrative.\n</think>\n\n### INTER' } }]
+        }) + '\n\n'
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert(writes.join('').includes('<think>0. Audit.'));
+    assert(!writes.join('').includes('</think>'), 'The close tag must wait for state-prefix inspection');
+
+    input.end(
+        'data: ' + JSON.stringify({
+            choices: [{ delta: { content: misplacedStateThenNarrative.slice('### INTER'.length) } }]
+        }) + '\n\n' +
+        'data: [DONE]\n\n'
+    );
+    await ended;
+
+    let content = '';
+    writes.join('').split(/\n\n/).forEach(function(event) {
+        if (event.indexOf('data: ') !== 0 || event === 'data: [DONE]') return;
+        const parsed = JSON.parse(event.slice(6));
+        const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
+        if (delta && typeof delta.content === 'string') content += delta.content;
+    });
+
+    const closeAt = content.indexOf('</think>');
+    assert.strictEqual((content.match(/### INTERNAL STATES/g) || []).length, 1);
+    assert(content.indexOf('### INTERNAL STATES') < closeAt);
+    assert(content.indexOf('[ 🕰️ 10:19 AM') > closeAt);
+    assert(content.indexOf('*Jane sets down her mug.*') > closeAt);
+}
+
 Promise.all([
     testStreamedReasoningAlias(),
     testStreamedReasoningWithState(),
-    testLiteralLeadingStateThinkStreams()
+    testStreamedReasoningRelocatesVisibleStatePrefix(),
+    testLiteralLeadingStateThinkStreams(),
+    testLiteralThinkRelocatesPostThinkState()
 ]).then(function() {
     console.log('thinking.test.js: all assertions passed');
 }).catch(function(error) {

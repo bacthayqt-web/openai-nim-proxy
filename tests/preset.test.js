@@ -63,6 +63,8 @@ assert(!boltPrompt.content.includes('Brainstorm 3 very distinct'));
 assert(!boltPrompt.content.includes('write dialogue examples'));
 assert(reasoningGate.content.includes('STOP CONDITION'));
 assert(reasoningGate.content.includes('never as a composition workspace'));
+assert(reasoningGate.content.includes('Never write a placeholder'));
+assert(reasoningGate.content.includes('`</think>` followed by `### INTERNAL STATES` is forbidden'));
 assert.strictEqual(ids[ids.length - 1], reasoningGateId, 'The completion gate must be the final preset instruction');
 
 const genericBuilt = helpers.buildOrderedMessagesFromPreset(
@@ -109,6 +111,8 @@ const janitorStateBuilt = helpers.buildOrderedMessagesFromPreset(
 const janitorStateSystem = janitorStateBuilt.find((message) => message.role === 'system');
 assert(janitorStateSystem.content.includes('final part of private reasoning'));
 assert(janitorStateSystem.content.includes('Never append Internal States after the narrative'));
+assert(janitorStateSystem.content.includes('DO NOT write a placeholder'));
+assert(janitorStateSystem.content.includes('FORBIDDEN OUTPUT ORDER'));
 assert(janitorStateSystem.content.includes('DND SIM — Dice=law'));
 assert(janitorStateSystem.content.includes('#### PHYSICS, ENGINE & WORLD'));
 assert(!janitorStateSystem.content.includes('<details>'));

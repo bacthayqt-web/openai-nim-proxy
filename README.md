@@ -55,6 +55,15 @@ route so the think box and its state record remain in conversation history.
 Regex 3.0's thought cleanup is applied only after the newest state has been
 recovered for model context, so it cannot discard state stored inside that box.
 
+If a model disobeys the channel instruction and emits `### INTERNAL STATES`
+immediately after `</think>`, the Janitor response layer keeps the think box
+open, recognizes the following FF5 clock header as the start of narrative,
+moves the state record before `</think>`, and removes the visible duplicate.
+It also suppresses the relocated copy when the provider's native reasoning
+channel already contains a complete state record. In this fallback case the
+reasoning continues streaming normally, while visible narrative is released
+after the state boundary has been verified.
+
 ## OpenRouter routes
 
 For Chub and other generic OpenAI-compatible clients, use this API base:
