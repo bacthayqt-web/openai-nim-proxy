@@ -25,6 +25,7 @@ const thirdPersonId = '019f62e8-892f-7007-bb78-86fc2ab61efe';
 const hybridId = '019f62e8-892f-700a-8e10-84695d624918';
 const coloredDialogueId = '019f62e8-892f-7019-be65-715a4949cba0';
 const boltId = '634ecfec-1862-4ce0-821e-e31057acadfa';
+const reasoningGateId = 'reasoning_completion_gate';
 const maxId = '019f62e8-892f-7032-b004-1869f8bc0782';
 const internalStateId = '019f62e8-892f-7027-93ef-159f3d55c410';
 
@@ -33,12 +34,15 @@ assert(!ids.includes(freakyId), 'Freaky Mode must be inactive');
 assert(ids.includes(thirdPersonId), 'Third-person POV must be active');
 assert(!ids.includes(hybridId), 'Hybrid POV must be inactive');
 assert(ids.includes(boltId), 'BOLT reasoning must be active');
+assert(ids.includes(reasoningGateId), 'The anti-drafting completion gate must be active');
 assert(!ids.includes(maxId), 'MAX reasoning must be inactive');
 assert(!ids.includes(coloredDialogueId), 'Colored Dialogue must be inactive');
 assert.strictEqual(preset.profile.nsfw_mode, 'realism');
 assert.strictEqual(preset.profile.preset_version, '5.4');
 assert.strictEqual(preset.profile.regex_suite, '3.0');
 assert.strictEqual(preset.profile.reasoning, 'bolt');
+assert.strictEqual(preset.profile.reasoning_guard, 'single_pass_anti_draft');
+assert.strictEqual(preset.profile.reasoning_task_target_words, 30);
 assert.strictEqual(preset.profile.pov, 'third_person');
 assert.strictEqual(preset.profile.colored_dialogue, false);
 assert.strictEqual(preset.profile.npc_voice, 'micro_2.0');
@@ -51,6 +55,16 @@ assert(dndPrompt, 'FF5.4 DnD prompt must be present');
 assert.strictEqual((dndPrompt.content.match(/<internal_dndsim>/g) || []).length, 1, 'DnD wrapper must open once');
 assert.strictEqual((dndPrompt.content.match(/<\/internal_dndsim>/g) || []).length, 1, 'DnD wrapper must close once');
 
+const boltPrompt = preset.prompts.find((prompt) => prompt.identifier === boltId);
+const reasoningGate = preset.prompts.find((prompt) => prompt.identifier === reasoningGateId);
+assert(boltPrompt.content.includes('Run Tasks 0-10 exactly once and in order'));
+assert(boltPrompt.content.includes('No sample dialogue'));
+assert(!boltPrompt.content.includes('Brainstorm 3 very distinct'));
+assert(!boltPrompt.content.includes('write dialogue examples'));
+assert(reasoningGate.content.includes('STOP CONDITION'));
+assert(reasoningGate.content.includes('never as a composition workspace'));
+assert.strictEqual(ids[ids.length - 1], reasoningGateId, 'The completion gate must be the final preset instruction');
+
 const genericBuilt = helpers.buildOrderedMessagesFromPreset(
     preset,
     [{ role: 'user', content: 'Start.' }]
@@ -60,6 +74,7 @@ assert(genericSystem, 'Generic compiled preset must contain a merged system mess
 assert(genericSystem.content.includes('<internal_states>'));
 assert(genericSystem.content.includes('<!-- GFX_START -->'));
 assert(genericSystem.content.includes('<internal_dndsim>'));
+assert(genericSystem.content.includes('# BOLT Completion Gate'));
 
 const janitorBuilt = helpers.buildOrderedMessagesFromPreset(
     preset,
@@ -70,7 +85,8 @@ const janitorBuilt = helpers.buildOrderedMessagesFromPreset(
 const janitorSystem = janitorBuilt.find((message) => message.role === 'system');
 assert(janitorSystem, 'Janitor compiled preset must contain a merged system message');
 assert(janitorSystem.content.includes('# Realism Mode:'));
-assert(janitorSystem.content.includes('# Reasoning Rules'));
+assert(janitorSystem.content.includes('# BOLT Reasoning Checklist'));
+assert(janitorSystem.content.includes('# BOLT Completion Gate'));
 assert(!janitorSystem.content.includes('# Freaky Mode:'));
 assert(!janitorSystem.content.includes('# Reasoning Protocol'));
 assert(!janitorSystem.content.includes('<!-- FF5_INTERNAL_STATE'));

@@ -20,7 +20,7 @@ var OPENROUTER_APP_NAME = String(process.env.OPENROUTER_APP_NAME || '').trim();
 var SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 var ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 var THINKING_MODE_CONFIGURED = process.env.ENABLE_THINKING_MODE !== undefined;
-var REASONING_EFFORT = normalizeReasoningEffort(process.env.REASONING_EFFORT, 'high');
+var REASONING_EFFORT = normalizeReasoningEffort(process.env.REASONING_EFFORT, 'medium');
 var REASONING_BUDGET = parsePositiveInteger(process.env.REASONING_BUDGET);
 var REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '600000', 10);
 var MAX_TEMPERATURE = 2.0;

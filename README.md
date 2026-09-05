@@ -14,7 +14,7 @@ Chub and other generic frontends:
 - Third-person POV (replaces FF5's default Hybrid POV)
 - Realism Mode
 - Anti-Echo
-- BOLT reasoning
+- Single-pass BOLT reasoning with an anti-drafting completion gate
 - Micro NPC Voice 2.0
 - Pop-in Graphics, Spectacle Combat, Onomatopoeia, and HQ NPC Genesis
 - All eight Internal States modules: DnD Simulator, Internal Agenda, GM's
@@ -107,8 +107,8 @@ PORT=3000
 REQUEST_TIMEOUT=600000
 SHOW_REASONING=false
 ENABLE_THINKING_MODE=false
-REASONING_EFFORT=high
-REASONING_BUDGET=16384
+REASONING_EFFORT=medium
+# REASONING_BUDGET=4096
 ```
 
 `OPENROUTER_MODEL` is only a fallback for non-canonical aliases; a request that
@@ -133,7 +133,19 @@ every model like GLM:
 | Native reasoners such as DeepSeek R1 and MiniMax | Provider defaults; no invented flags |
 
 `REASONING_EFFORT` accepts `none`, `low`, `medium`, `high`, `xhigh`, or
-`max`. `REASONING_BUDGET` is optional; omit it to use the provider default.
+`max`. The default is `medium`, which is the recommended balance for the BOLT
+checklist. `REASONING_BUDGET` is optional; omit it to use the provider default.
+If you set it for OpenRouter or Nemotron, start near `4096`; large values such
+as `16384` permit much longer reasoning even though the anti-drafting gate still
+asks the model to stop early.
+
+The active BOLT prompt runs Tasks 0-10 as one concise pass. Each task produces
+one decision note instead of examples, alternative scene paths, repeated rule
+lists, or draft dialogue. A final completion gate tells the model to abandon
+any wording that begins to resemble visible prose, finish the remaining task
+labels concisely, write Internal States once in the frontend-specific location,
+and move directly to the final response. This changes prompt behavior only; it
+does not buffer, rewrite, or truncate streamed reasoning.
 Recognized per-request options in root `chat_template_kwargs`, SDK-style
 `extra_body.chat_template_kwargs`, and top-level `reasoning_effort` or
 `reasoning_budget` are normalized automatically.
