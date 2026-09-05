@@ -742,7 +742,7 @@ function findInternalStateStart(input) {
         /<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/i,
         /<internal[_\s-]*states?\b/i,
         /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,100}INTERNAL\s+STATES?\b/i,
-        /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b/im,
+        /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:ðŸŽ¬[ \t]*)?INTERNAL\s+STATES?\b/im,
         /(?:^|\n)[ \t]*(?:\*\*)?\[(?:NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)\](?:\*\*)?/im,
         /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|INVENTORY, FEATS & TITLES)\b/im
     ];
@@ -796,7 +796,7 @@ function normalizeJanitorInternalState(input) {
         .replace(/<b\b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
         .replace(/<\/?(?:internal[_\s-]*states?|pre|div|span|ul|li|p)\b[^>]*>/gi, '')
         .replace(/<!--|-->/g, '')
-        .replace(/(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b[^\n]*/i, '')
+        .replace(/(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:ðŸŽ¬[ \t]*)?INTERNAL\s+STATES?\b[^\n]*/i, '')
         .replace(/^\s*TURN:\s*(.+)$/gim, '**TURN:** $1')
         .replace(/^\s*\[(NPC AGENDAS|NPC LOCATIONS|FACTIONS|BONDS|QUESTS|INVENTORY(?:, FEATS & TITLES)?|CHEKHOV(?:'S)? GUN|INTERNAL THOUGHTS|GM(?:'S)? NOTEBOOK|DND TASK SIM|WORLD SIM|PHYSICS, ENGINE & WORLD)\]\s*$/gim, '#### $1')
         .replace(/\n{3,}/g, '\n\n')
@@ -813,7 +813,7 @@ function wrapJanitorInternalState(input) {
 
 function hideJanitorInternalStateComment(input) {
     var markdown = normalizeJanitorInternalState(input);
-    if (markdown) markdown = markdown.replace(/--+/g, '—');
+    if (markdown) markdown = markdown.replace(/--+/g, 'â€”');
     return markdown
         ? '<!-- FF5_INTERNAL_STATE\n' + markdown + '\nEND_FF5_INTERNAL_STATE -->'
         : '';
@@ -839,7 +839,7 @@ function splitJanitorResponseContent(input) {
             /<!--\s*FF5(?:[_\s-]*INTERNAL)?[_\s-]*STATES?\b/i,
             /<internal[_\s-]*states?\b/i,
             /<details\b[^>]*>\s*<summary\b[^>]*>[^<\n]{0,100}INTERNAL\s+STATES?\b/i,
-            /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:🎬[ \t]*)?INTERNAL\s+STATES?\b/im
+            /(?:^|\n)[ \t]{0,3}(?:#{1,6}[ \t]+|\*\*|__)?(?:ðŸŽ¬[ \t]*)?INTERNAL\s+STATES?\b/im
         ];
         patterns.forEach(function(pattern) {
             var found = pattern.exec(source);
@@ -940,18 +940,18 @@ function escapeHtml(input) {
 }
 
 var GENERIC_STATE_SECTION_META = [
-    { names: ['NPC AGENDAS', 'NPC AGENDA'], summary: '👤 NPC AGENDAS' },
-    { names: ['NPC LOCATIONS', 'NPC LOCATION'], summary: '👤 NPC LOCATIONS' },
-    { names: ['FACTIONS', 'FACTION'], summary: '🏳️ FACTIONS' },
-    { names: ['BONDS', 'BOND TRACKER', 'RELATIONSHIPS'], summary: '💚 BONDS' },
-    { names: ['QUESTS', 'QUEST'], summary: '📜 QUESTS' },
-    { names: ['INVENTORY, FEATS & TITLES', 'INVENTORY, FEATS AND TITLES', 'INV & SKILLS', 'INVENTORY & STATUS', 'INVENTORY'], summary: '🎒 INVENTORY, FEATS & TITLES' },
-    { names: ["CHEKHOV'S GUN", 'CHEKHOV GUN', 'CHEKHOV SEEDS'], summary: "🔫 CHEKHOV'S GUN" },
-    { names: ['INTERNAL THOUGHTS', 'NPC THOUGHTS'], summary: '🧠 INTERNAL THOUGHTS' },
-    { names: ["GM'S NOTEBOOK", 'GM NOTEBOOK'], summary: "📓 GM'S NOTEBOOK" },
-    { names: ['DND TASK SIM', 'DND SIM', 'DND SIMULATOR'], summary: '🎲 DND TASK SIM' },
-    { names: ['WORLD SIM', 'WORLD SIMULATOR'], summary: '🌎 WORLD SIM' },
-    { names: ['PHYSICS, ENGINE & WORLD', 'PHYSICS, ENGINE AND WORLD', 'PHYSICS & WORLD'], summary: '🌌 PHYSICS, ENGINE & WORLD' }
+    { names: ['NPC AGENDAS', 'NPC AGENDA'], summary: 'ðŸ‘¤ NPC AGENDAS' },
+    { names: ['NPC LOCATIONS', 'NPC LOCATION'], summary: 'ðŸ‘¤ NPC LOCATIONS' },
+    { names: ['FACTIONS', 'FACTION'], summary: 'ðŸ³ï¸ FACTIONS' },
+    { names: ['BONDS', 'BOND TRACKER', 'RELATIONSHIPS'], summary: 'ðŸ’š BONDS' },
+    { names: ['QUESTS', 'QUEST'], summary: 'ðŸ“œ QUESTS' },
+    { names: ['INVENTORY, FEATS & TITLES', 'INVENTORY, FEATS AND TITLES', 'INV & SKILLS', 'INVENTORY & STATUS', 'INVENTORY'], summary: 'ðŸŽ’ INVENTORY, FEATS & TITLES' },
+    { names: ["CHEKHOV'S GUN", 'CHEKHOV GUN', 'CHEKHOV SEEDS'], summary: "ðŸ”« CHEKHOV'S GUN" },
+    { names: ['INTERNAL THOUGHTS', 'NPC THOUGHTS'], summary: 'ðŸ§  INTERNAL THOUGHTS' },
+    { names: ["GM'S NOTEBOOK", 'GM NOTEBOOK'], summary: "ðŸ““ GM'S NOTEBOOK" },
+    { names: ['DND TASK SIM', 'DND SIM', 'DND SIMULATOR'], summary: 'ðŸŽ² DND TASK SIM' },
+    { names: ['WORLD SIM', 'WORLD SIMULATOR'], summary: 'ðŸŒŽ WORLD SIM' },
+    { names: ['PHYSICS, ENGINE & WORLD', 'PHYSICS, ENGINE AND WORLD', 'PHYSICS & WORLD'], summary: 'ðŸŒŒ PHYSICS, ENGINE & WORLD' }
 ];
 
 function identifyGenericStateSection(line) {
@@ -1024,7 +1024,7 @@ function buildGenericInternalStateFromText(input) {
         }
 
         // Ignore the master heading/turn line; the outer <summary> restores it.
-        if (/^(?:#{1,6}\s*)?(?:\*\*|__)?(?:🎬\s*)?INTERNAL\s+STATES?\b/i.test(trimmed)) return;
+        if (/^(?:#{1,6}\s*)?(?:\*\*|__)?(?:ðŸŽ¬\s*)?INTERNAL\s+STATES?\b/i.test(trimmed)) return;
         if (/^(?:\*\*)?TURN:\s*/i.test(trimmed)) return;
 
         var meta = identifyGenericStateSection(trimmed);
@@ -1043,7 +1043,7 @@ function buildGenericInternalStateFromText(input) {
     // the normal FF5 regex suite to restore its colors, menus and relationship
     // graphics instead of showing a plaintext <pre> fallback.
     if (sections.length > 0) {
-        var outerSummary = '🎬 INTERNAL STATES' + (turn ? ' (Turn: ' + turn + ')' : '');
+        var outerSummary = 'ðŸŽ¬ INTERNAL STATES' + (turn ? ' (Turn: ' + turn + ')' : '');
         var out = [
             '<!-- GFX_START -->',
             '<internal_states>',
@@ -1074,7 +1074,7 @@ function buildGenericInternalStateFromText(input) {
     return '<!-- GFX_START -->\n' +
         '<internal_states>\n' +
         '<details>\n' +
-        '<summary>🎬 INTERNAL STATES</summary>\n' +
+        '<summary>ðŸŽ¬ INTERNAL STATES</summary>\n' +
         '<pre style="white-space:pre-wrap;margin:0;">' + escapeHtml(body) + '</pre>\n' +
         '</details>\n' +
         '</internal_states>\n' +
@@ -1402,7 +1402,7 @@ function getEnhancedMessages(model, messages, allowHtmlUI) {
         var lastIndex = enhanced.length - 1;
         if (lastIndex >= 0 && enhanced[lastIndex].role === 'user') {
             enhanced[lastIndex] = Object.assign({}, enhanced[lastIndex], {
-                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only — no JSON.]'
+                content: enhanced[lastIndex].content + '\n\n[Formatting reminder: Every paragraph MUST be separated by a blank line (two newlines). Speech in "quotes", Actions in *asterisks*, Emphasis in **double asterisks**, Thoughts in `backticks`. Plain text only â€” no JSON.]'
             });
         }
     }
