@@ -132,12 +132,15 @@ If you set it for OpenRouter or Nemotron, start near `4096`; large values such
 as `16384` permit much longer reasoning even though the anti-drafting gate still
 asks the model to stop early.
 
-The active BOLT prompt runs Tasks 0-10 as one concise pass. Each task produces
-one decision note instead of examples, alternative scene paths, repeated rule
-lists, or draft dialogue. Task 10 performs a final visible-history consistency
-check and moves directly to the response. The completion gate explicitly bans
-Internal States, trackers, relationship tables, DnD logs, and substitute state
-blocks on every frontend.
+The active BOLT prompt runs Tasks 0-10 as one bounded pass. Each task produces
+exactly one note of one or two compact sentences, normally 15-45 words. The
+additional room is reserved for causality, ambiguity, and conflicting
+instructions; examples, branching scene paths, repeated rule lists, draft
+dialogue, and narrative rehearsal remain forbidden. Task 10 performs one final
+visible-history consistency check and can correct at most one conflict before
+moving directly to the response. The completion gate explicitly bans second
+review passes, Internal States, trackers, relationship tables, DnD logs, and
+substitute state blocks on every frontend.
 Recognized per-request options in root `chat_template_kwargs`, SDK-style
 `extra_body.chat_template_kwargs`, and top-level `reasoning_effort` or
 `reasoning_budget` are normalized automatically.

@@ -44,7 +44,7 @@ assert.strictEqual(preset.profile.preset_version, '5.4');
 assert.strictEqual(preset.profile.regex_suite, '3.0');
 assert.strictEqual(preset.profile.reasoning, 'bolt');
 assert.strictEqual(preset.profile.reasoning_guard, 'single_pass_anti_draft');
-assert.strictEqual(preset.profile.reasoning_task_target_words, 30);
+assert.strictEqual(preset.profile.reasoning_task_target_words, 45);
 assert.strictEqual(preset.profile.pov, 'third_person');
 assert.strictEqual(preset.profile.colored_dialogue, false);
 assert.strictEqual(preset.profile.npc_voice, 'micro_2.0');
@@ -60,13 +60,35 @@ assert.strictEqual((dndPrompt.content.match(/<\/internal_dndsim>/g) || []).lengt
 
 const boltPrompt = { content: noStateOverrides[boltId] };
 const reasoningGate = { content: noStateOverrides[reasoningGateId] };
+const baseBoltPrompt = preset.prompts.find((prompt) => prompt.identifier === boltId);
+const baseReasoningGate = preset.prompts.find((prompt) => prompt.identifier === reasoningGateId);
 assert(boltPrompt.content.includes('Run Tasks 0-10 exactly once and in order'));
+assert(boltPrompt.content.includes('exactly one numbered note per task'));
+assert(boltPrompt.content.includes('normally 15-45 words'));
+assert(boltPrompt.content.includes('ambiguity, causal consequences, or conflicting instructions'));
+assert.deepStrictEqual(
+    Array.from(boltPrompt.content.matchAll(/^(\d+)\./gm), (match) => Number(match[1])),
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    'BOLT must define each task exactly once and in sequence'
+);
 assert(boltPrompt.content.includes('No sample dialogue'));
 assert(!boltPrompt.content.includes('Brainstorm 3 very distinct'));
 assert(!boltPrompt.content.includes('write dialogue examples'));
 assert(reasoningGate.content.includes('never as a composition workspace'));
+assert(reasoningGate.content.includes('no more than two short sentences per note'));
+assert(reasoningGate.content.includes('do not optimize wording'));
 assert(reasoningGate.content.includes('INTERNAL STATES ARE DISABLED ON EVERY FRONTEND'));
 assert(boltPrompt.content.includes('Do not create hidden trackers or state records'));
+assert.strictEqual(
+    helpers.expandPresetMacros(baseBoltPrompt.content, {}),
+    boltPrompt.content,
+    'The base and universal no-state BOLT prompts must stay synchronized'
+);
+assert.strictEqual(
+    baseReasoningGate.content,
+    reasoningGate.content,
+    'The base and universal no-state completion gates must stay synchronized'
+);
 assert.strictEqual(ids[ids.length - 1], reasoningGateId, 'The completion gate must be the final preset instruction');
 
 const genericBuilt = helpers.buildOrderedMessagesFromPreset(
@@ -80,6 +102,8 @@ assert(genericSystem, 'Generic compiled preset must contain a merged system mess
 assert(genericSystem.content.includes('<!-- GFX_START -->'));
 assert(genericSystem.content.includes('# BOLT Completion Gate'));
 assert(genericSystem.content.includes('INTERNAL STATES ARE DISABLED ON EVERY FRONTEND'));
+assert(genericSystem.content.includes('normally 15-45 words'));
+assert(!genericSystem.content.includes('track via internal states'));
 assert(!genericSystem.content.includes('<internal_states_module>'));
 assert(!genericSystem.content.includes('<internal_dndsim>'));
 assert(!genericSystem.content.includes('#### NPC AGENDAS'));
