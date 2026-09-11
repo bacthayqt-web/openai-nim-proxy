@@ -62,6 +62,10 @@ and forwards the caller's `messages` array without injecting the Frankenstein
 preset or the proxy's formatting system prompt. It also preserves message
 order and does not merge multiple system messages.
 
+The same API base exposes `GET https://YOUR-PROXY/raw/v1/models` for frontend
+connection checks and OpenAI-compatible model discovery. Models returned from
+this endpoint are marked with `preset: "none"`.
+
 Model aliases from `MODEL_MAPPING`, request parameter validation, model-specific
 thinking controls, streaming, and OpenAI-compatible response handling still
 apply. Send a canonical NIM model ID in `model` when you do not want alias

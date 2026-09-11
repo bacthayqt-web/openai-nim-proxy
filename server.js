@@ -1595,7 +1595,8 @@ app.get('/health', function(req, res) {
     });
 });
 
-app.get('/v1/models', function(req, res) {
+app.get(['/v1/models', '/raw/v1/models'], function(req, res) {
+    var rawNimModels = req.path === '/raw/v1/models';
     var models = Object.keys(MODEL_MAPPING).map(function(id) {
         var nimModel = MODEL_MAPPING[id];
         var preset = getPresetForModel(nimModel);
@@ -1616,7 +1617,7 @@ app.get('/v1/models', function(req, res) {
             created: Math.floor(Date.now() / 1000),
             owned_by: 'nvidia-nim-proxy',
             nim_model: nimModel,
-            preset: presetLabel
+            preset: rawNimModels ? 'none' : presetLabel
         };
     });
     res.json({ object: 'list', data: models });
