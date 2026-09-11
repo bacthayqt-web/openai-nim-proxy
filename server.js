@@ -75,6 +75,10 @@ function detectProvider(req) {
     return req.path.indexOf('/openrouter/') !== -1 ? 'openrouter' : 'nim';
 }
 
+function isRawNimRoute(req) {
+    return req.path === '/raw/v1/chat/completions';
+}
+
 function resolveOpenRouterModel(requestedModel, options) {
     options = options || {};
     var mapping = options.mapping || OPENROUTER_MODEL_MAPPING;
@@ -1643,6 +1647,7 @@ app.get(['/openrouter/v1/models', '/janitor/openrouter/v1/models'], async functi
 app.post([
     '/v1/chat/completions',
     '/janitor/v1/chat/completions',
+    '/raw/v1/chat/completions',
     '/openrouter/v1/chat/completions',
     '/janitor/openrouter/v1/chat/completions'
 ], async function(req, res) {
@@ -1663,6 +1668,7 @@ app.post([
         var sanitized = validateAndSanitizeParams(temperature, max_tokens);
         var wantsStream = toBoolean(stream);
         var provider = detectProvider(req);
+        var rawNimRequest = isRawNimRoute(req);
         var upstreamModel = provider === 'openrouter'
             ? resolveOpenRouterModel(model)
             : (MODEL_MAPPING[model] || model);
@@ -1691,18 +1697,19 @@ app.post([
             sanitized.temperature = Math.min(sanitized.temperature, 1.0); // GLM max is 1.0
         }
 
-        // Frankenstein is now the universal preset for every model. Ignore
-        // legacy client overrides so no frontend can silently select an older
-        // model-specific preset.
-        var preset = getPresetForModel(upstreamModel);
-        if (preset_override && preset_override !== 'frankenstein') {
+        // Frankenstein remains universal on the existing routes. The explicit
+        // NIM-only raw route leaves prompt construction entirely to the caller.
+        var preset = rawNimRequest ? null : getPresetForModel(upstreamModel);
+        if (!rawNimRequest && preset_override && preset_override !== 'frankenstein') {
             console.log('Preset override ignored: ' + preset_override + ' (universal Frankenstein routing is active)');
         }
 
         var frontend = detectFrontend(req);
         var processedMessages = messages;
 
-        if (preset) {
+        if (rawNimRequest) {
+            console.log('Raw NIM route: forwarding caller messages without preset or formatting prompt injection');
+        } else if (preset) {
             var promptOverrides = PROMPT_OVERRIDES[frontend];
             var promptExclusions = PROMPT_EXCLUSIONS[frontend] || [];
             var dropAllInternalStates = true;
@@ -1724,14 +1731,19 @@ app.post([
 
         var useFF5Display = preset === PRESET_FRANKENSTEIN;
         var allowHtmlUI = useFF5Display && frontend !== 'janitor';
-        var enhancedMessages = getEnhancedMessages(upstreamModel, processedMessages, allowHtmlUI);
+        var enhancedMessages = rawNimRequest
+            ? processedMessages
+            : getEnhancedMessages(upstreamModel, processedMessages, allowHtmlUI);
 
         // EXTRA SAFETY FIX: Guarantee only ONE system message ever exists for GLM compatibility
-        var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
-        var finalOtherMsgs = enhancedMessages.filter(function(m) { return m.role !== 'system'; });
-        if (finalSystemMsgs.length > 1) {
-            var combinedFinalSystem = finalSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
-            enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
+        // Do not reorder or merge caller-owned prompts on the raw route.
+        if (!rawNimRequest) {
+            var finalSystemMsgs = enhancedMessages.filter(function(m) { return m.role === 'system'; });
+            var finalOtherMsgs = enhancedMessages.filter(function(m) { return m.role !== 'system'; });
+            if (finalSystemMsgs.length > 1) {
+                var combinedFinalSystem = finalSystemMsgs.map(function(m) { return m.content; }).join('\n\n');
+                enhancedMessages = [{ role: 'system', content: combinedFinalSystem }].concat(finalOtherMsgs);
+            }
         }
 
         var upstreamRequest;
@@ -2227,6 +2239,7 @@ module.exports._test = {
     buildOpenRouterRequest: buildOpenRouterRequest,
     resolveOpenRouterModel: resolveOpenRouterModel,
     detectProvider: detectProvider,
+    isRawNimRoute: isRawNimRoute,
     detectFrontend: detectFrontend,
     shouldShowReasoning: shouldShowReasoning,
     stripThinkBlocks: stripThinkBlocks,

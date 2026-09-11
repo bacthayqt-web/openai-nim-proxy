@@ -48,6 +48,25 @@ still exposes the model's ordinary BOLT checklist in one leading `<think>` box,
 but Internal States are removed from both reasoning and visible content. Old
 state records are also pruned from the history supplied to the next model call.
 
+### Raw NIM route
+
+When your frontend owns the complete prompt, use this API base:
+
+```text
+https://YOUR-PROXY/raw/v1
+```
+
+Its full chat endpoint is
+`https://YOUR-PROXY/raw/v1/chat/completions`. This route uses NVIDIA NIM only
+and forwards the caller's `messages` array without injecting the Frankenstein
+preset or the proxy's formatting system prompt. It also preserves message
+order and does not merge multiple system messages.
+
+Model aliases from `MODEL_MAPPING`, request parameter validation, model-specific
+thinking controls, streaming, and OpenAI-compatible response handling still
+apply. Send a canonical NIM model ID in `model` when you do not want alias
+mapping.
+
 ## OpenRouter routes
 
 For Chub and other generic OpenAI-compatible clients, use this API base:
