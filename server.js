@@ -49,7 +49,7 @@ var FF5_REGEX = loadPreset('ff5-regex') || [];
 
 var MODEL_MAPPING = {
     'gpt-3.5-turbo': 'moonshotai/kimi-k3',
-    'gpt-4': 'z-ai/glm-5.2',
+    'gpt-4': 'z-ai/glm-5.3',
     'gpt-4-turbo': 'z-ai/glm-5.3-flash',
     'gpt-4o': 'deepseek-ai/deepseek-v4-pro-0813',
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash-0731',
