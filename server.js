@@ -53,7 +53,7 @@ var MODEL_MAPPING = {
     'gpt-4-turbo': 'z-ai/glm-5.3-flash',
     'gpt-4o': 'deepseek-ai/deepseek-v4-pro-0813',
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash-0731',
-    'claude-3-opus': 'google/gemma-4-31b-it',
+    'claude-3-opus': 'deepseek-ai/deepseek-v4.1-flash',
     'claude-3-sonnet': 'nvidia/nemotron-3-ultra-550b-a55b',
     'gemini-pro': 'meta/muse-glimmer-30b'
 };
