@@ -55,7 +55,7 @@ var MODEL_MAPPING = {
     'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash-0731',
     'claude-3-opus': 'deepseek-ai/deepseek-v4.1-flash',
     'claude-3-sonnet': 'nvidia/nemotron-3-ultra-550b-a55b',
-    'gemini-pro': 'meta/muse-glimmer-30b'
+    'gemini-pro': 'moonshotai/kimi-k2.6'
 };
 
 function parseJsonObject(value, label) {
