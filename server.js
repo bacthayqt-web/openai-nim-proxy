@@ -48,14 +48,14 @@ var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
 var FF5_REGEX = loadPreset('ff5-regex') || [];
 
 var MODEL_MAPPING = {
-    'gpt-3.5-turbo': 'moonshotai/kimi-k3',
-    'gpt-4': 'z-ai/glm-5.3',
-    'gpt-4-turbo': 'z-ai/glm-5.3-flash',
-    'gpt-4o': 'deepseek-ai/deepseek-v4-pro-0813',
-    'gpt-4-0613': 'deepseek-ai/deepseek-v4-flash-0731',
-    'claude-3-opus': 'deepseek-ai/deepseek-v4.1-flash',
-    'claude-3-sonnet': 'nvidia/nemotron-3-ultra-550b-a55b',
-    'gemini-pro': 'meta/muse-glimmer-30b'
+    'moonshotai/kimi-k3': 'moonshotai/kimi-k3',
+    'z-ai/glm-5.3': 'z-ai/glm-5.3',
+    'z-ai/glm-5.3-flash': 'z-ai/glm-5.3-flash',
+    'deepseek-ai/deepseek-v4-pro-0813': 'deepseek-ai/deepseek-v4-pro-0813',
+    'deepseek-ai/deepseek-v4-flash-0731': 'deepseek-ai/deepseek-v4-flash-0731',
+    'deepseek-ai/deepseek-v4.1-flash': 'deepseek-ai/deepseek-v4.1-flash',
+    'nvidia/nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
+    'meta/muse-glimmer-30b': 'meta/muse-glimmer-30b'
 };
 
 function parseJsonObject(value, label) {
@@ -2216,12 +2216,12 @@ if (require.main === module) {
         console.log('Model -> Preset Mapping:');
         var modelKeys = Object.keys(MODEL_MAPPING);
         for (var i = 0; i < modelKeys.length; i++) {
-            var openaiId = modelKeys[i];
-            var nimId = MODEL_MAPPING[openaiId];
+            var modelId = modelKeys[i];
+            var nimId = MODEL_MAPPING[modelId];
             var preset = getPresetForModel(nimId);
             var presetName = preset ? preset.name : 'NONE';
             var isKimi = isKimiModel(nimId) ? 'Kimi' : 'Non-Kimi';
-            console.log('   - ' + openaiId + ' -> ' + nimId + ' (' + isKimi + ') -> ' + presetName);
+            console.log('   - ' + modelId + ' -> ' + nimId + ' (' + isKimi + ') -> ' + presetName);
         }
     });
 }
