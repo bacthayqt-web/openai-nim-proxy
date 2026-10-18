@@ -52,7 +52,7 @@ var MODEL_MAPPING = {
     'z-ai/glm-5.3': 'z-ai/glm-5.3',
     'z-ai/glm-5.3-flash': 'z-ai/glm-5.3-flash',
     'stepfun-ai/step-5-preview': 'stepfun-ai/step-5-preview',
-    'qwen/qwen3.8-2.4t-a95b': 'qwen/qwen3.8-2.4t-a95b',
+    'moonshotai/kimi-k2.6': 'moonshotai/kimi-k2.6',
     'deepseek-ai/deepseek-v4.1-flash': 'deepseek-ai/deepseek-v4.1-flash',
     'nvidia/nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
     'meta/muse-glimmer-30b': 'meta/muse-glimmer-30b'
