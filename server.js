@@ -48,7 +48,7 @@ var PRESET_FREAKYDEEPY = loadPreset('freakydeepy');
 var FF5_REGEX = loadPreset('ff5-regex') || [];
 
 var MODEL_MAPPING = {
-    'moonshotai/kimi-k3': 'moonshotai/kimi-k3',
+    'minimaxai/minimax-m3.1-flash': 'minimaxai/minimax-m3.1-flash',
     'z-ai/glm-5.3': 'z-ai/glm-5.3',
     'z-ai/glm-5.3-flash': 'z-ai/glm-5.3-flash',
     'stepfun-ai/step-5-preview': 'stepfun-ai/step-5-preview',
