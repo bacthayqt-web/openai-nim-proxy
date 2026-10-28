@@ -404,7 +404,7 @@ function detectFrontend(req) {
 // thinking can stay enabled for every request, but generic clients receive
 // only the final answer even when reasoning display is enabled globally.
 function shouldShowReasoning(frontend) {
-    return SHOW_REASONING && frontend === 'janitor';
+    return SHOW_REASONING;
 }
 
 function stripThinkBlocks(input) {
