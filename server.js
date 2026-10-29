@@ -49,7 +49,7 @@ var FF5_REGEX = loadPreset('ff5-regex') || [];
 
 var MODEL_MAPPING = {
     'minimaxai/minimax-m3.1-flash': 'minimaxai/minimax-m3.1-flash',
-    'z-ai/glm-5.3': 'z-ai/glm-5.3',
+    'mistralai/mistral-large-4-1t-a52b': 'mistralai/mistral-large-4-1t-a52b',
     'z-ai/glm-5.3-flash': 'z-ai/glm-5.3-flash',
     'stepfun-ai/step-5-preview': 'stepfun-ai/step-5-preview',
     'nvidia/nemotron-3.5-super-vl-120b-a12b': 'nvidia/nemotron-3.5-super-vl-120b-a12b',
