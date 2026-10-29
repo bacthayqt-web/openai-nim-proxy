@@ -148,6 +148,9 @@ function getThinkingProfile(nimModelId) {
     if (isKimiModel(lower)) return 'thinking';
     if (lower.indexOf('qwen') !== -1 || lower.indexOf('qwq') !== -1) return 'qwen';
     if (lower.indexOf('nemotron') !== -1) return 'nemotron';
+    // Mistral Large 4 uses the root-level reasoning_effort field. It does not
+    // use chat_template_kwargs.enable_thinking.
+    if (lower.indexOf('mistral-large-4') !== -1) return 'mistral-large-4';
     if (lower.indexOf('minimax') !== -1) return 'native-reasoning';
     if (lower.indexOf('reasoning') !== -1 || /(?:^|[/_-])r1(?:$|[/_-])/.test(lower)) {
         return 'native-reasoning';
@@ -263,6 +266,29 @@ function buildThinkingConfig(nimModelId, requestBody, defaults) {
         delete kwargs.thinking;
         delete kwargs.enable_thinking;
         kwargs.reasoning_effort = enabled ? effort : 'none';
+    } else if (profile === 'mistral-large-4') {
+        // Mistral Large 4 expects reasoning_effort at the request root.
+        // An explicit per-request effort takes precedence over the global
+        // thinking switch; NVIDIA documents "none" as the opt-out value.
+        delete kwargs.thinking;
+        delete kwargs.enable_thinking;
+        delete kwargs.reasoning_effort;
+
+        var explicitMistralEffort = requestBody.reasoning_effort !== undefined
+            ? requestBody.reasoning_effort
+            : (extraBody.reasoning_effort !== undefined
+                ? extraBody.reasoning_effort
+                : clientKwargs.reasoning_effort);
+        var mistralEffort = explicitMistralEffort !== undefined
+            ? normalizeReasoningEffort(explicitMistralEffort, effort)
+            : (enabled ? effort : 'none');
+
+        // The endpoint accepts low/medium/high/none. Collapse proxy-only
+        // aliases to the closest supported value.
+        if (mistralEffort === 'xhigh' || mistralEffort === 'max') mistralEffort = 'high';
+        topLevel.reasoning_effort = mistralEffort;
+        enabled = mistralEffort !== 'none';
+        effort = mistralEffort;
     } else if (profile === 'native-reasoning') {
         // These models reason natively and may reject invented template flags.
         // Forward only recognized client options when the caller supplied them.
@@ -1770,14 +1796,43 @@ app.post([
             };
 
             // The OpenAI Python SDK flattens extra_body into the actual HTTP JSON.
-            // This proxy posts raw JSON, so normalize recognized client options and
-            // place them at NIM's real root-level locations.
+            // This proxy posts raw JSON, so preserve supported OpenAI-compatible
+            // request options rather than silently dropping them when rebuilding
+            // the NIM payload. Do not blindly forward proxy-only fields.
+            var nimExtraBody = req.body.extra_body && typeof req.body.extra_body === 'object'
+                ? req.body.extra_body
+                : {};
+            [
+                'top_p',
+                'frequency_penalty',
+                'presence_penalty',
+                'seed',
+                'stop',
+                'tools',
+                'tool_choice',
+                'response_format',
+                'parallel_tool_calls'
+            ].forEach(function(key) {
+                var value = req.body[key] !== undefined ? req.body[key] : nimExtraBody[key];
+                if (value !== undefined) upstreamRequest[key] = value;
+            });
+
+            // Mistral and some other NVIDIA recipes require fields at the root
+            // of the JSON body; applyThinkingConfig translates thinking controls
+            // into the provider-specific dialect.
             var thinkingConfig = applyThinkingConfig(upstreamRequest, upstreamModel, req.body);
             console.log(
                 '   - Thinking profile: ' + thinkingConfig.profile +
                 ' (' + (thinkingConfig.enabled ? 'enabled' : 'disabled') +
                 ', effort: ' + thinkingConfig.effort + ')'
             );
+            if (thinkingConfig.profile === 'mistral-large-4') {
+                console.log('   - Mistral reasoning_effort: ' + upstreamRequest.reasoning_effort);
+                console.log('   - Mistral multimodal message content preserved: ' +
+                    enhancedMessages.some(function(message) {
+                        return Array.isArray(message && message.content);
+                    }));
+            }
         }
 
         var upstreamBase = provider === 'openrouter'
