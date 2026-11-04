@@ -55,7 +55,7 @@ var MODEL_MAPPING = {
     'nvidia/nemotron-3.5-super-vl-120b-a12b': 'nvidia/nemotron-3.5-super-vl-120b-a12b',
     'deepseek-ai/deepseek-v4.1-flash': 'deepseek-ai/deepseek-v4.1-flash',
     'nvidia/nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
-    'meta/muse-glimmer-30b': 'meta/muse-glimmer-30b'
+    'moonshotai/kimi-k3.1-pro': 'moonshotai/kimi-k3.1-pro'
 };
 
 function parseJsonObject(value, label) {
