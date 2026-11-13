@@ -10,6 +10,13 @@ var NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com
 var NIM_API_KEY = process.env.NIM_API_KEY;
 var OPENROUTER_API_BASE = (process.env.OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+var UNOROUTER_API_BASE = (process.env.UNOROUTER_API_BASE || 'https://api.unorouter.com/v1').replace(/\/+$/, '');
+var UNOROUTER_API_KEY = process.env.UNOROUTER_API_KEY;
+var UNOROUTER_DEFAULT_MODEL = String(process.env.UNOROUTER_MODEL || '').trim();
+var UNOROUTER_MODEL_MAPPING = parseJsonObject(
+    process.env.UNOROUTER_MODEL_MAPPING,
+    'UNOROUTER_MODEL_MAPPING'
+);
 var OPENROUTER_DEFAULT_MODEL = String(process.env.OPENROUTER_MODEL || '').trim();
 var OPENROUTER_MODEL_MAPPING = parseJsonObject(
     process.env.OPENROUTER_MODEL_MAPPING,
@@ -71,12 +78,35 @@ function parseJsonObject(value, label) {
     return {};
 }
 
-function detectProvider(req) {
-    return req.path.indexOf('/openrouter/') !== -1 ? 'openrouter' : 'nim';
+function detectProvider(req, requestedModel) {
+    var requestPath = req && req.path ? req.path : '';
+    if (requestPath.indexOf('/unorouter/') !== -1) return 'unorouter';
+    if (requestPath.indexOf('/openrouter/') !== -1) return 'openrouter';
+    // On the shared /v1 route, an explicitly configured UnoRouter alias wins.
+    // This keeps model-based routing opt-in and leaves all existing model IDs alone.
+    if (requestedModel && Object.prototype.hasOwnProperty.call(UNOROUTER_MODEL_MAPPING, requestedModel)) {
+        return 'unorouter';
+    }
+    return 'nim';
 }
 
 function isRawNimRoute(req) {
     return req.path === '/raw/v1/chat/completions';
+}
+
+function resolveUnoRouterModel(requestedModel, options) {
+    options = options || {};
+    var mapping = options.mapping || UNOROUTER_MODEL_MAPPING;
+    var defaultModel = options.defaultModel !== undefined
+        ? String(options.defaultModel || '').trim()
+        : UNOROUTER_DEFAULT_MODEL;
+    var requested = String(requestedModel || '').trim();
+    if (requested && Object.prototype.hasOwnProperty.call(mapping, requested)) {
+        return String(mapping[requested] || '').trim();
+    }
+    // Preserve provider-qualified model IDs; otherwise allow a configured fallback.
+    if (requested.indexOf('/') !== -1) return requested;
+    return defaultModel || requested;
 }
 
 function resolveOpenRouterModel(requestedModel, options) {
@@ -406,6 +436,37 @@ function buildOpenRouterRequest(requestBody, model, messages, sanitized, wantsSt
     else delete result.reasoning;
 
     return result;
+}
+
+function buildUnoRouterRequest(requestBody, model, messages, sanitized, wantsStream) {
+    var result = Object.assign({}, requestBody || {});
+    delete result.extra_body;
+    delete result.preset_override;
+    delete result.chat_template_kwargs;
+    delete result.thinking;
+    delete result.enable_thinking;
+    delete result.reasoning_effort;
+    delete result.reasoning_budget;
+    result.model = model;
+    result.messages = messages;
+    result.temperature = sanitized.temperature;
+    result.max_tokens = sanitized.max_tokens;
+    result.stream = wantsStream;
+    // Flatten SDK-style extra_body without overriding the normalized core fields.
+    if (requestBody && requestBody.extra_body && typeof requestBody.extra_body === 'object') {
+        Object.keys(requestBody.extra_body).forEach(function(key) {
+            if (result[key] === undefined) result[key] = requestBody.extra_body[key];
+        });
+    }
+    return result;
+}
+
+function buildUnoRouterHeaders(wantsStream) {
+    return {
+        Authorization: 'Bearer ' + UNOROUTER_API_KEY,
+        'Content-Type': 'application/json',
+        Accept: wantsStream ? 'text/event-stream' : 'application/json'
+    };
 }
 
 function buildOpenRouterHeaders(wantsStream) {
@@ -1611,7 +1672,8 @@ app.get('/health', function(req, res) {
         timeout_seconds: REQUEST_TIMEOUT / 1000,
         providers: {
             nim_configured: !!NIM_API_KEY,
-            openrouter_configured: !!OPENROUTER_API_KEY
+            openrouter_configured: !!OPENROUTER_API_KEY,
+            unorouter_configured: !!UNOROUTER_API_KEY
         },
         presets: {
             frankenstein: !!PRESET_FRANKENSTEIN,
@@ -1649,6 +1711,23 @@ app.get(['/v1/models', '/raw/v1/models'], function(req, res) {
     res.json({ object: 'list', data: models });
 });
 
+app.get(['/unorouter/v1/models', '/janitor/unorouter/v1/models'], async function(req, res) {
+    if (!UNOROUTER_API_KEY) {
+        return res.status(500).json({ error: { message: 'UNOROUTER_API_KEY missing', code: 500 } });
+    }
+    try {
+        var response = await axios.get(UNOROUTER_API_BASE + '/models', {
+            headers: buildUnoRouterHeaders(false),
+            timeout: REQUEST_TIMEOUT,
+            validateStatus: function() { return true; }
+        });
+        return res.status(response.status).json(response.data);
+    } catch (error) {
+        console.error('UnoRouter model-list error:', error.message);
+        return res.status(500).json({ error: { message: error.message || 'UnoRouter model-list error', code: 500 } });
+    }
+});
+
 app.get(['/openrouter/v1/models', '/janitor/openrouter/v1/models'], async function(req, res) {
     if (!OPENROUTER_API_KEY) {
         return res.status(500).json({
@@ -1676,7 +1755,9 @@ app.post([
     '/janitor/v1/chat/completions',
     '/raw/v1/chat/completions',
     '/openrouter/v1/chat/completions',
-    '/janitor/openrouter/v1/chat/completions'
+    '/janitor/openrouter/v1/chat/completions',
+    '/unorouter/v1/chat/completions',
+    '/janitor/unorouter/v1/chat/completions'
 ], async function(req, res) {
     try {
         var model = req.body.model;
@@ -1694,11 +1775,13 @@ app.post([
 
         var sanitized = validateAndSanitizeParams(temperature, max_tokens);
         var wantsStream = toBoolean(stream);
-        var provider = detectProvider(req);
+        var provider = detectProvider(req, model);
         var rawNimRequest = isRawNimRoute(req);
         var upstreamModel = provider === 'openrouter'
             ? resolveOpenRouterModel(model)
-            : (MODEL_MAPPING[model] || model);
+            : (provider === 'unorouter'
+                ? resolveUnoRouterModel(model)
+                : (MODEL_MAPPING[model] || model));
 
         if (!upstreamModel) {
             return res.status(400).json({
@@ -1706,13 +1789,15 @@ app.post([
             });
         }
 
-        var upstreamApiKey = provider === 'openrouter' ? OPENROUTER_API_KEY : NIM_API_KEY;
+        var upstreamApiKey = provider === 'openrouter'
+            ? OPENROUTER_API_KEY
+            : (provider === 'unorouter' ? UNOROUTER_API_KEY : NIM_API_KEY);
         if (!upstreamApiKey) {
             return res.status(500).json({
                 error: {
                     message: provider === 'openrouter'
                         ? 'OPENROUTER_API_KEY missing'
-                        : 'NIM_API_KEY missing',
+                        : (provider === 'unorouter' ? 'UNOROUTER_API_KEY missing' : 'NIM_API_KEY missing'),
                     code: 500
                 }
             });
@@ -1775,7 +1860,16 @@ app.post([
 
         var upstreamRequest;
 
-        if (provider === 'openrouter') {
+        if (provider === 'unorouter') {
+            upstreamRequest = buildUnoRouterRequest(
+                req.body,
+                upstreamModel,
+                enhancedMessages,
+                sanitized,
+                wantsStream
+            );
+            console.log('   - UnoRouter request: OpenAI-compatible payload; preset pipeline active');
+        } else if (provider === 'openrouter') {
             upstreamRequest = buildOpenRouterRequest(
                 req.body,
                 upstreamModel,
@@ -1837,14 +1931,14 @@ app.post([
 
         var upstreamBase = provider === 'openrouter'
             ? OPENROUTER_API_BASE
-            : NIM_API_BASE.replace(/\/+$/, '');
+            : (provider === 'unorouter' ? UNOROUTER_API_BASE : NIM_API_BASE.replace(/\/+$/, ''));
         var upstreamHeaders = provider === 'openrouter'
             ? buildOpenRouterHeaders(wantsStream)
-            : {
+            : (provider === 'unorouter' ? buildUnoRouterHeaders(wantsStream) : {
                 Authorization: 'Bearer ' + NIM_API_KEY,
                 'Content-Type': 'application/json',
                 Accept: wantsStream ? 'text/event-stream' : 'application/json'
-            };
+            });
 
         var response = await axios.post(
             upstreamBase + '/chat/completions',
@@ -2258,6 +2352,8 @@ if (require.main === module) {
         console.log('   - FranKIMstein preset loaded: ' + (PRESET_FRANKIMSTEIN ? 'YES' : 'NO'));
         console.log('   - FreakyDeepy preset loaded: ' + (PRESET_FREAKYDEEPY ? 'YES' : 'NO'));
         console.log('   - OpenRouter configured: ' + (OPENROUTER_API_KEY ? 'YES' : 'NO'));
+        console.log('   - UnoRouter configured: ' + (UNOROUTER_API_KEY ? 'YES' : 'NO'));
+        console.log('   - UnoRouter default model: ' + (UNOROUTER_DEFAULT_MODEL || 'direct model IDs / mapping')); 
         console.log('   - OpenRouter default model: ' + (OPENROUTER_DEFAULT_MODEL || 'direct model IDs'));
 
         if (!NIM_API_KEY) {
@@ -2265,6 +2361,9 @@ if (require.main === module) {
         }
         if (!OPENROUTER_API_KEY) {
             console.warn('WARNING: OPENROUTER_API_KEY is missing; OpenRouter routes are disabled.');
+        }
+        if (!UNOROUTER_API_KEY) {
+            console.warn('WARNING: UNOROUTER_API_KEY is missing; UnoRouter routes are disabled.');
         }
 
         console.log('');
@@ -2294,6 +2393,8 @@ module.exports._test = {
     buildOpenRouterReasoningConfig: buildOpenRouterReasoningConfig,
     buildOpenRouterRequest: buildOpenRouterRequest,
     resolveOpenRouterModel: resolveOpenRouterModel,
+    resolveUnoRouterModel: resolveUnoRouterModel,
+    buildUnoRouterRequest: buildUnoRouterRequest,
     detectProvider: detectProvider,
     isRawNimRoute: isRawNimRoute,
     detectFrontend: detectFrontend,
